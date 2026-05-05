@@ -1,0 +1,102 @@
+name: IDP Deploy
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'services/**'
+
+jobs:
+  validate:
+    name: Validate Config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate YAML syntax
+        run: |
+          sudo apt-get install -y python3-yaml 2>/dev/null || true
+          python3 - <<'EOF'
+          import yaml, glob, sys
+          files = glob.glob('services/**/*.yaml', recursive=True)
+          if not files:
+              print('No service configs found in this PR.')
+              sys.exit(0)
+          for path in files:
+              with open(path) as f:
+                  yaml.safe_load(f)
+              print(f'✅ Valid YAML: {path}')
+          EOF
+
+      - name: Validate required fields
+        run: |
+          python3 - <<'EOF'
+          import yaml, glob, sys
+
+          REQUIRED   = {'service', 'environment', 'region', 'pattern', 'modules'}
+          ALLOWED_ENVS = {'dev', 'test', 'prod'}
+          ALLOWED_PATTERNS = {'cloud_run', 'gke_application', 'data_pipeline'}
+
+          errors = []
+          for path in glob.glob('services/**/*.yaml', recursive=True):
+              with open(path) as f:
+                  cfg = yaml.safe_load(f)
+              missing = REQUIRED - set(cfg.keys())
+              if missing:
+                  errors.append(f'{path}: missing required fields: {missing}')
+              if cfg.get('environment') not in ALLOWED_ENVS:
+                  errors.append(f"{path}: invalid environment '{cfg.get('environment')}'")
+              if cfg.get('pattern') not in ALLOWED_PATTERNS:
+                  errors.append(f"{path}: unknown pattern '{cfg.get('pattern')}'")
+              if not isinstance(cfg.get('modules'), list) or len(cfg.get('modules', [])) == 0:
+                  errors.append(f'{path}: modules must be a non-empty list')
+
+          if errors:
+              for e in errors:
+                  print(f'❌ {e}')
+              sys.exit(1)
+          print('✅ All service configs are valid')
+          EOF
+
+  plan:
+    name: Terraform Plan (Placeholder)
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show changed service configs
+        run: |
+          echo "📋 Changed service configs in this PR:"
+          git diff --name-only origin/main...HEAD -- 'services/**' 2>/dev/null || \
+          git diff --name-only HEAD~1 HEAD -- 'services/**' 2>/dev/null || \
+          echo "  (unable to diff – treating as new branch)"
+
+      - name: Terraform init (placeholder)
+        run: |
+          echo "🔧 terraform init"
+          echo "   Would initialise Terraform with NGDI module registry"
+
+      - name: Terraform validate (placeholder)
+        run: |
+          echo "🔍 terraform validate"
+          echo "   Would validate generated Terraform configuration"
+
+      - name: Terraform plan (placeholder)
+        run: |
+          echo "📐 terraform plan"
+          echo "   Would show infrastructure changes before applying"
+
+  deploy:
+    name: Terraform Apply (Placeholder)
+    needs: plan
+    runs-on: ubuntu-latest
+    # Runs only after merge to main
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Terraform apply (placeholder)
+        run: |
+          echo "🚀 terraform apply -auto-approve"
+          echo "   Would provision GCP resources via NGDI modules"

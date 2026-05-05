@@ -1,0 +1,67 @@
+# GKE Application – NGDI Module Template
+# Reference configuration showing how modules map to Terraform resources.
+
+pattern: gke_application
+
+modules:
+  gke_cluster:
+    source: "git::https://github.com/ngdi/terraform-modules.git//modules/gke_cluster"
+    variables:
+      cluster_name: "{{ service_name }}-cluster"
+      region: "{{ region }}"
+      project_id: "{{ project_id }}"
+      release_channel: REGULAR
+
+  gke_node_pool:
+    source: "git::https://github.com/ngdi/terraform-modules.git//modules/gke_node_pool"
+    variables:
+      node_pool_name: "{{ service_name }}-pool"
+      cluster_name: "{{ service_name }}-cluster"
+      machine_type: e2-medium
+      min_count: 1
+      max_count: 5
+      disk_size_gb: 50
+
+  iam_service_account:
+    source: "git::https://github.com/ngdi/terraform-modules.git//modules/iam_service_account"
+    variables:
+      account_id: "{{ service_name }}-sa"
+      display_name: "Service account for {{ service_name }}"
+      project_id: "{{ project_id }}"
+
+  artifact_registry:
+    source: "git::https://github.com/ngdi/terraform-modules.git//modules/artifact_registry"
+    variables:
+      repository_id: "{{ service_name }}"
+      region: "{{ region }}"
+      format: DOCKER
+
+  network:
+    source: "git::https://github.com/ngdi/terraform-modules.git//modules/network"
+    variables:
+      project_id: "{{ project_id }}"
+      region: "{{ region }}"
+      network_name: "{{ service_name }}-vpc"
+
+  dns:
+    source: "git::https://github.com/ngdi/terraform-modules.git//modules/dns"
+    variables:
+      service_name: "{{ service_name }}"
+      environment: "{{ environment }}"
+
+optional_modules:
+  db:
+    cloud_sql:
+      source: "git::https://github.com/ngdi/terraform-modules.git//modules/cloud_sql"
+      variables:
+        instance_name: "{{ service_name }}-db"
+        region: "{{ region }}"
+        database_version: POSTGRES_15
+        tier: db-g1-small
+
+  pubsub:
+    pubsub:
+      source: "git::https://github.com/ngdi/terraform-modules.git//modules/pubsub"
+      variables:
+        topic_name: "{{ service_name }}-events"
+        subscription_name: "{{ service_name }}-events-sub"

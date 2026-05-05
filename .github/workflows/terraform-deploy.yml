@@ -1,0 +1,265 @@
+name: Terraform Deploy to Cloud Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      approve:
+        description: 'Require manual approval before deploy'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+  push:
+    branches:
+      - main
+    paths:
+      - 'infra/cloud-run/**'
+
+jobs:
+  plan:
+    name: Terraform Plan
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+
+    outputs:
+      has_changes: ${{ steps.plan.outputs.exitcode }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.6.0
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+
+      - name: Get deployment environment
+        id: env
+        run: |
+          ENV=${{ github.event.inputs.environment || 'dev' }}
+          echo "environment=${ENV}" >> $GITHUB_OUTPUT
+          echo "tfvars_file=terraform.${ENV}.tfvars" >> $GITHUB_OUTPUT
+
+      - name: Terraform Init
+        working-directory: ./infra/cloud-run
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="prefix=cloud-run/${{ steps.env.outputs.environment }}" \
+            -upgrade
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: ./infra/cloud-run
+        run: |
+          terraform plan \
+            -var-file="${{ steps.env.outputs.tfvars_file }}" \
+            -out=tfplan \
+            -no-color \
+            -lock=true || EXIT_CODE=$?
+          echo "exitcode=${EXIT_CODE:-0}" >> $GITHUB_OUTPUT
+
+      - name: Convert Plan to JSON
+        if: always()
+        working-directory: ./infra/cloud-run
+        run: terraform show -json tfplan > tfplan.json
+
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: terraform-plan-${{ steps.env.outputs.environment }}
+          path: infra/cloud-run/tfplan*
+          retention-days: 7
+
+  approval:
+    name: Manual Approval
+    needs: plan
+    runs-on: ubuntu-latest
+    if: |
+      github.event.inputs.approve == 'true' && 
+      needs.plan.outputs.has_changes != '0'
+    environment: ${{ github.event.inputs.environment || 'production' }}
+    
+    steps:
+      - name: Awaiting approval
+        run: echo "Deployment waiting for manual approval in ${{ github.environment }}"
+
+  apply:
+    name: Terraform Apply
+    needs: [plan, approval]
+    runs-on: ubuntu-latest
+    if: |
+      always() && 
+      (needs.approval.result == 'success' || github.event.inputs.approve == 'false') &&
+      (needs.plan.result == 'success')
+    
+    permissions:
+      contents: read
+      id-token: write
+      checks: write
+
+    env:
+      ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.6.0
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: terraform-plan-${{ env.ENVIRONMENT }}
+          path: infra/cloud-run/
+
+      - name: Terraform Init
+        working-directory: ./infra/cloud-run
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="prefix=cloud-run/${{ env.ENVIRONMENT }}" \
+            -upgrade
+
+      - name: Terraform Apply
+        working-directory: ./infra/cloud-run
+        run: |
+          terraform apply \
+            -auto-approve \
+            -no-color \
+            -lock=true \
+            tfplan
+
+      - name: Extract Outputs
+        id: outputs
+        working-directory: ./infra/cloud-run
+        run: |
+          SERVICE_URL=$(terraform output -raw service_url)
+          LOAD_BALANCER_IP=$(terraform output -raw load_balancer_ip)
+          SERVICE_ACCOUNT=$(terraform output -raw service_account_email)
+          
+          echo "service_url=${SERVICE_URL}" >> $GITHUB_OUTPUT
+          echo "load_balancer_ip=${LOAD_BALANCER_IP}" >> $GITHUB_OUTPUT
+          echo "service_account=${SERVICE_ACCOUNT}" >> $GITHUB_OUTPUT
+
+      - name: Create Deployment Annotation
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'Terraform Deployment',
+              head_sha: context.sha,
+              status: 'completed',
+              conclusion: 'success',
+              output: {
+                title: 'Cloud Run Deployment Successful',
+                summary: `Successfully deployed Cloud Run service to ${process.env.ENVIRONMENT} environment`,
+                text: `
+                **Environment**: ${process.env.ENVIRONMENT}
+                **Service URL**: ${{ steps.outputs.outputs.service_url }}
+                **Load Balancer IP**: ${{ steps.outputs.outputs.load_balancer_ip }}
+                **Service Account**: ${{ steps.outputs.outputs.service_account }}
+                `
+              }
+            });
+
+      - name: Notify Deployment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const deploymentUrl = `https://console.cloud.google.com/run?project=${process.env.GCP_PROJECT}`;
+            core.notice(`🚀 Cloud Run service deployed successfully to ${process.env.ENVIRONMENT}\nView in console: ${deploymentUrl}`);
+
+      - name: Store Deployment Info
+        working-directory: ./infra/cloud-run
+        run: |
+          {
+            echo "# Cloud Run Deployment Info - ${{ env.ENVIRONMENT }}"
+            echo "**Deployment Date**: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "**Service URL**: $(terraform output -raw service_url)"
+            echo "**Load Balancer IP**: $(terraform output -raw load_balancer_ip)"
+            echo "**Service Account**: $(terraform output -raw service_account_email)"
+            echo "**Commit**: ${{ github.sha }}"
+          } > deployment-info-${{ env.ENVIRONMENT }}.md
+
+      - name: Upload Deployment Info
+        uses: actions/upload-artifact@v3
+        with:
+          name: deployment-info-${{ env.ENVIRONMENT }}
+          path: infra/cloud-run/deployment-info-${{ env.ENVIRONMENT }}.md
+          retention-days: 30
+
+  rollback:
+    name: Rollback on Failure
+    needs: apply
+    runs-on: ubuntu-latest
+    if: failure()
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Notify Rollback
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.error('Cloud Run deployment failed. Review logs and consider rollback.');
+
+      - name: Create Issue for Failed Deployment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `❌ Cloud Run Deployment Failed - ${{ github.event.inputs.environment || 'dev' }}`,
+              body: `
+              Automated deployment to ${{ github.event.inputs.environment || 'dev' }} failed.
+              
+              **Commit**: ${{ github.sha }}
+              **Workflow**: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+              
+              Please review the workflow logs and take appropriate action.
+              `,
+              labels: ['infrastructure', 'deployment-failed']
+            });
