@@ -4,6 +4,7 @@
  */
 
 import yaml from 'js-yaml';
+import { curlFetch } from './curlFetch';
 
 // Pattern Metadata from Backstage format
 export interface PatternMetadata {
@@ -184,13 +185,12 @@ async function fetchCatalogPatterns(): Promise<Pattern[]> {
   try {
     console.log('[PatternService] Fetching patterns from catalog API...');
     
-    // Node.js fetch automatically respects HTTP_PROXY and HTTPS_PROXY environment variables
-    const response = await fetch('https://catalog-api-479677124022.europe-west2.run.app/catalog');
+    const response = await curlFetch('https://catalog-api-479677124022.europe-west2.run.app/catalog');
     if (!response.ok) {
       throw new Error(`Catalog API returned ${response.status}`);
     }
 
-    const yamlText = await response.text();
+    const yamlText = response.text();
     const documents = yamlText.split('---').filter((doc) => doc.trim());
 
     const patterns: Pattern[] = [];

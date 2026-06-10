@@ -4,6 +4,8 @@
  * Caches blocks and provides access to module metadata and variable schemas
  */
 
+import { curlFetch } from './curlFetch';
+
 const CATALOG_API_BASE = 'https://catalog-api-479677124022.europe-west2.run.app';
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
@@ -32,6 +34,112 @@ export interface BuildingBlock {
   outputs: Array<{ name: string; description: string; type: string }>;
   dependencies: string[]; // IDs of blocks this depends on
   tags: string[];
+}
+
+// ─── Catalog API response shape ──────────────────────────────────────────────
+interface CatalogBlockResponse {
+  building_block: string;
+  modules: string[];
+  variables_tf: string;
+}
+
+// ─── Category lookup ──────────────────────────────────────────────────────────
+const BLOCK_CATEGORIES: Record<string, BuildingBlock['category']> = {
+  network: 'network', firewall: 'network', dns: 'network', external_global_address: 'network',
+  external_global_loadbalancer: 'network', network_policy: 'network', integration: 'network',
+  iam: 'iam', keys: 'security', security_policy: 'security', security_operations: 'security',
+  bastion: 'security',
+  bigquery: 'data', analytics: 'data', environment: 'data', workflow: 'data',
+  bucket: 'storage', sql: 'storage',
+  delivery: 'compute', serverless_app: 'compute', k8s: 'compute', K8s: 'compute', helm: 'compute',
+  pubsub: 'monitoring',
+};
+
+/**
+ * Parse a variables.tf HCL string into Variable[]
+ */
+function parseVariablesTf(hcl: string): Variable[] {
+  const variables: Variable[] = [];
+  let i = 0;
+
+  while (i < hcl.length) {
+    const varStart = hcl.indexOf('variable "', i);
+    if (varStart === -1) break;
+
+    const nameStart = varStart + 10;
+    const nameEnd = hcl.indexOf('"', nameStart);
+    if (nameEnd === -1) break;
+    const name = hcl.slice(nameStart, nameEnd);
+
+    const braceStart = hcl.indexOf('{', nameEnd);
+    if (braceStart === -1) break;
+
+    // Find matching closing brace
+    let depth = 1;
+    let j = braceStart + 1;
+    while (j < hcl.length && depth > 0) {
+      if (hcl[j] === '{') depth++;
+      else if (hcl[j] === '}') depth--;
+      j++;
+    }
+
+    const body = hcl.slice(braceStart + 1, j - 1);
+
+    const descMatch = body.match(/description\s*=\s*"([^"]*?)"/);
+    const typeMatch = body.match(/type\s*=\s*(\S+(?:\([^)]*\))?)/);
+    const hasDefault = /default\s*=/.test(body);
+
+    let defaultValue: any = undefined;
+    if (hasDefault) {
+      const defStr = body.match(/default\s*=\s*"([^"]*?)"/);
+      const defBool = body.match(/default\s*=\s*(true|false)/);
+      const defNull = /default\s*=\s*null/.test(body);
+      const defNum  = body.match(/default\s*=\s*(-?\d+(?:\.\d+)?)(?:\s|$)/);
+
+      if (defStr)  defaultValue = defStr[1];
+      else if (defBool) defaultValue = defBool[1] === 'true';
+      else if (defNull) defaultValue = null;
+      else if (defNum)  defaultValue = parseFloat(defNum[1]);
+    }
+
+    const rawType = typeMatch ? typeMatch[1] : 'string';
+    let type: Variable['type'] = 'string';
+    if (rawType === 'number')          type = 'number';
+    else if (rawType === 'bool')       type = 'boolean';
+    else if (rawType.startsWith('list'))   type = 'list';
+    else if (rawType.startsWith('map') || rawType.startsWith('object') || rawType === 'any') type = 'map';
+
+    const v: Variable = { name, type, description: descMatch ? descMatch[1] : '', required: !hasDefault };
+    if (hasDefault) v.default = defaultValue;
+    variables.push(v);
+
+    i = j;
+  }
+
+  return variables;
+}
+
+/**
+ * Transform a CatalogBlockResponse from the catalog API into the internal BuildingBlock shape
+ */
+function catalogResponseToBlock(blockId: string, resp: CatalogBlockResponse): BuildingBlock {
+  const displayName = blockId
+    .split('_')
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+
+  return {
+    id: blockId,
+    name: resp.building_block,
+    displayName,
+    description: `${displayName} building block (modules: ${resp.modules.join(', ')})`,
+    category: BLOCK_CATEGORIES[blockId] ?? 'compute',
+    version: '1.0.0',
+    variables: parseVariablesTf(resp.variables_tf),
+    outputs: [],
+    dependencies: [],
+    tags: resp.modules,
+  };
 }
 
 // Cache for fetched blocks
@@ -482,22 +590,15 @@ export class BuildingBlockService {
     }
 
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000); // 3 second timeout
-
-      // Node.js fetch automatically respects HTTP_PROXY and HTTPS_PROXY environment variables
-      const response = await fetch(`${CATALOG_API_BASE}/buildingblock/${blockId}`, {
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
+      const response = await curlFetch(`${CATALOG_API_BASE}/buildingblock/${blockId}`, { timeoutMs: 10000 });
 
       if (!response.ok) {
         throw new Error(`API returned ${response.status}`);
       }
 
-      const block = await response.json() as BuildingBlock;
-      
+      const apiResp = response.json() as CatalogBlockResponse;
+      const block = catalogResponseToBlock(blockId, apiResp);
+
       // Cache the result
       blockCache.set(blockId, {
         data: block,

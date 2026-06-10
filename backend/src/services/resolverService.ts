@@ -3,8 +3,8 @@
  * Manages deployment resolution and Terraform file generation
  */
 
-import https from 'https';
 import { logResolverAPICall } from '../debugLogger';
+import { curlFetch } from './curlFetch';
 
 /**
  * Deployment payload sent to resolver
@@ -66,111 +66,69 @@ export interface ResolverResponse extends TerraformFiles {
  * Resolver service for managing API interactions
  */
 export class ResolverService {
-  private static readonly RESOLVER_API_HOST = 'resolver-api-479677124022.europe-west2.run.app';
-  private static readonly RESOLVER_API_PORT = 443;
-  private static readonly RESOLVER_API_PATH = '/resolve';
-  private static readonly TIMEOUT_MS = 30000; // 30 second timeout for resolver
+  private static readonly RESOLVER_URL = 'https://resolver-api-479677124022.europe-west2.run.app/resolve';
+  private static readonly TIMEOUT_MS = 60000; // 60 second timeout (resolver fetches GitHub modules)
 
   /**
-   * Submit a deployment to the resolver API
+   * Submit a deployment to the resolver API using fetch() (proxy-aware via global undici dispatcher)
    */
   static async submitDeployment(payload: ResolverDeploymentPayload): Promise<ResolverResponse> {
-    return new Promise((resolve, reject) => {
-      const startTime = Date.now();
-      const payloadJson = JSON.stringify(payload);
-      const contentLength = Buffer.byteLength(payloadJson);
+    const startTime = Date.now();
+    const payloadJson = JSON.stringify(payload);
 
-      const options = {
-        hostname: this.RESOLVER_API_HOST,
-        port: this.RESOLVER_API_PORT,
-        path: this.RESOLVER_API_PATH,
+    try {
+      const response = await curlFetch(this.RESOLVER_URL, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': contentLength,
-          'User-Agent': 'IDP-Portal-Backend/1.0',
-        },
-      };
-
-      const timeoutId = setTimeout(() => {
-        request.destroy();
-        const error = new Error(`Resolver API timeout after ${this.TIMEOUT_MS}ms`);
-        logResolverAPICall({
-          deploymentId: payload.deploymentId,
-          endpoint: this.RESOLVER_API_PATH,
-          method: 'POST',
-          requestSize: contentLength,
-          responseStatus: 0,
-          responseSizeBytes: 0,
-          duration: Date.now() - startTime,
-          timestamp: new Date().toISOString(),
-          error: error.message,
-        });
-        reject(error);
-      }, this.TIMEOUT_MS);
-
-      const request = https.request(options, (response) => {
-        clearTimeout(timeoutId);
-        let data = '';
-
-        response.on('data', (chunk) => {
-          data += chunk;
-        });
-
-        response.on('end', () => {
-          const duration = Date.now() - startTime;
-          let responseData: any;
-
-          try {
-            responseData = JSON.parse(data);
-          } catch (e) {
-            responseData = { error: 'Invalid JSON response', message: data };
-          }
-
-          // Log resolver API call for debugging
-          logResolverAPICall({
-            deploymentId: payload.deploymentId,
-            endpoint: this.RESOLVER_API_PATH,
-            method: 'POST',
-            requestSize: contentLength,
-            responseStatus: response.statusCode || 0,
-            responseSizeBytes: Buffer.byteLength(data),
-            duration,
-            timestamp: new Date().toISOString(),
-            success: (response.statusCode === 200 || response.statusCode === 201),
-          });
-
-          if (response.statusCode === 200 || response.statusCode === 201) {
-            resolve(responseData as ResolverResponse);
-          } else {
-            const error = new Error(
-              `Resolver API returned ${response.statusCode}: ${responseData.message || 'Unknown error'}`
-            );
-            reject(error);
-          }
-        });
+        headers: { 'Content-Type': 'application/json', 'User-Agent': 'IDP-Portal-Backend/1.0' },
+        body: payloadJson,
+        timeoutMs: this.TIMEOUT_MS,
       });
 
-      request.on('error', (error) => {
-        clearTimeout(timeoutId);
-        const duration = Date.now() - startTime;
-        logResolverAPICall({
-          deploymentId: payload.deploymentId,
-          endpoint: this.RESOLVER_API_PATH,
-          method: 'POST',
-          requestSize: contentLength,
-          responseStatus: 0,
-          responseSizeBytes: 0,
-          duration,
-          timestamp: new Date().toISOString(),
-          error: error.message,
-        });
-        reject(error);
+      const duration = Date.now() - startTime;
+      const responseText = response.text();
+      let responseData: any;
+
+      try {
+        responseData = JSON.parse(responseText);
+      } catch {
+        responseData = { error: 'Invalid JSON response', message: responseText };
+      }
+
+      logResolverAPICall({
+        deploymentId: payload.deploymentId,
+        endpoint: '/resolve',
+        method: 'POST',
+        requestSize: Buffer.byteLength(payloadJson),
+        responseStatus: response.status,
+        responseSizeBytes: Buffer.byteLength(responseText),
+        duration,
+        timestamp: new Date().toISOString(),
+        success: response.ok,
       });
 
-      request.write(payloadJson);
-      request.end();
-    });
+      if (!response.ok) {
+        throw new Error(`Resolver API returned ${response.status}: ${responseData.detail || responseData.message || 'Unknown error'}`);
+      }
+
+      return responseData as ResolverResponse;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      const errorMsg = error instanceof Error ? error.message : String(error);
+
+      logResolverAPICall({
+        deploymentId: payload.deploymentId,
+        endpoint: '/resolve',
+        method: 'POST',
+        requestSize: Buffer.byteLength(payloadJson),
+        responseStatus: 0,
+        responseSizeBytes: 0,
+        duration,
+        timestamp: new Date().toISOString(),
+        error: errorMsg,
+      });
+
+      throw error;
+    }
   }
 
   /**

@@ -6,10 +6,32 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import https from 'https';
+import fs from 'fs';
+import path from 'path';
 import { ResolverService, ResolverDeploymentPayload, ResolverResponse } from './services/resolverService';
 
 dotenv.config();
+
+// ── Persistent pattern-deployments file ──────────────────────────────────────
+const PATTERN_DEPLOYMENTS_FILE = path.join(__dirname, '..', 'data', 'pattern-deployments.json');
+
+function loadPatternDeployments(): any[] {
+  try {
+    const raw = fs.readFileSync(PATTERN_DEPLOYMENTS_FILE, 'utf-8');
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+function savePatternDeployment(record: any): void {
+  const all = loadPatternDeployments();
+  // Replace existing record with same ID or append
+  const idx = all.findIndex((r: any) => r.deploymentId === record.deploymentId);
+  if (idx !== -1) all[idx] = record; else all.unshift(record);
+  fs.writeFileSync(PATTERN_DEPLOYMENTS_FILE, JSON.stringify(all, null, 2));
+}
+
 
 const PORT = process.env.PORT || 3001;
 const app: Express = express();
@@ -1159,6 +1181,33 @@ app.post('/api/deployments/patterns/submit', authenticateUser, async (req: Reque
 
     deployments.push(deployment);
 
+    // Persist pattern deployment to file (POC)
+    if (resolverResponse) {
+      savePatternDeployment({
+        deploymentId: deployment.id,
+        patternId,
+        projectId,
+        projectName: projectName || `project-${projectId}`,
+        status: deployment.status,
+        resolverStatus: deployment.resolverStatus,
+        createdBy: user.name,
+        createdAt: deployment.createdAt,
+        summary: resolverResponse.summary,
+        buildingBlocks: Object.keys(building_blocks),
+        terraformFiles: {
+          main_tf: resolverResponse.main_tf,
+          variables_tf: resolverResponse.variables_tf,
+          terraform_tfvars: resolverResponse.terraform_tfvars,
+        },
+        fileSizes: {
+          main_tf_size: Buffer.byteLength(resolverResponse.main_tf || '', 'utf-8'),
+          variables_tf_size: Buffer.byteLength(resolverResponse.variables_tf || '', 'utf-8'),
+          terraform_tfvars_size: Buffer.byteLength(resolverResponse.terraform_tfvars || '', 'utf-8'),
+        },
+      });
+      console.log('[Deployment] 💾 Saved pattern deployment to file');
+    }
+
     // Build response
     const responseData: any = {
       deploymentId: deployment.id,
@@ -1500,6 +1549,23 @@ app.get('/api/deployments', authenticateUser, (req: Request, res: Response) => {
       deployedAt: d.deployedAt,
     })),
   });
+});
+
+// ============================================================================
+// Pattern Deployments – persistent file endpoints (POC)
+// ============================================================================
+
+app.get('/api/pattern-deployments', authenticateUser, (_req: Request, res: Response) => {
+  const all = loadPatternDeployments();
+  // Return list without full terraform file contents
+  res.json(all.map(({ terraformFiles, ...rest }: any) => rest));
+});
+
+app.get('/api/pattern-deployments/:id', authenticateUser, (req: Request, res: Response) => {
+  const all = loadPatternDeployments();
+  const record = all.find((r: any) => r.deploymentId === req.params.id);
+  if (!record) return res.status(404).json({ error: 'Pattern deployment not found' });
+  res.json(record);
 });
 
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {

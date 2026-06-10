@@ -1,4 +1,204 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { api } from '../lib/api';
+
+// ── Pattern Deployment types ────────────────────────────────────────────────
+interface TerraformFiles {
+  main_tf: string;
+  variables_tf: string;
+  terraform_tfvars: string;
+}
+
+const NGDI_REPO = 'VFGROUP-NSE-DNOSS/DNE-PE-NGDI-TERRAFORM-MODULES';
+const NGDI_REPO_URL = `https://github.com/${NGDI_REPO}`;
+
+/** Derive a deterministic demo PR number from the deployment ID */
+function demoPrNumber(deploymentId: string): number {
+  const hex = deploymentId.replace(/-/g, '').slice(-4);
+  return 40 + (parseInt(hex, 16) % 60);
+}
+
+interface PatternDeployment {
+  deploymentId: string;
+  patternId: string;
+  projectId: string;
+  projectName: string;
+  status: string;
+  resolverStatus: string;
+  createdBy: string;
+  createdAt: string;
+  buildingBlocks: string[];
+  prUrl?: string;
+  prNumber?: number;
+  prBranch?: string;
+  prStatus?: 'open' | 'merged' | 'closed';
+  summary: {
+    building_blocks_requested: string[];
+    building_blocks_resolved: string[];
+    building_blocks_unresolved: string[];
+    modules_resolved: string[];
+    variables_extracted: number;
+    modules_with_fetch_errors: string[];
+  };
+  fileSizes: {
+    main_tf_size: number;
+    variables_tf_size: number;
+    terraform_tfvars_size: number;
+  };
+  terraformFiles?: TerraformFiles;
+}
+
+// ── Terraform console component ─────────────────────────────────────────────
+const TerraformConsole: React.FC<{ dep: PatternDeployment; onClose: () => void }> = ({ dep, onClose }) => {
+  const [activeFile, setActiveFile] = useState<'main_tf' | 'variables_tf' | 'terraform_tfvars'>('main_tf');
+  const [files, setFiles] = useState<TerraformFiles | null>(dep.terraformFiles || null);
+  const [loading, setLoading] = useState(!dep.terraformFiles);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!files) {
+      setLoading(true);
+      api.patternDeployments.get(dep.deploymentId)
+        .then((full: PatternDeployment) => { setFiles(full.terraformFiles || null); })
+        .catch(console.error)
+        .finally(() => setLoading(false));
+    }
+  }, [dep.deploymentId]);
+
+  const fileLabels = { main_tf: 'main.tf', variables_tf: 'variables.tf', terraform_tfvars: 'terraform.tfvars' };
+  const currentContent = files?.[activeFile] ?? '';
+
+  const formatBytes = (b: number) => b < 1024 ? `${b} B` : `${(b / 1024).toFixed(1)} KB`;
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(currentContent).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  const handleDownload = (key: 'main_tf' | 'variables_tf' | 'terraform_tfvars') => {
+    const content = files?.[key] ?? '';
+    const name = fileLabels[key];
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click();
+    URL.revokeObjectURL(url); document.body.removeChild(a);
+  };
+
+  const handleDownloadAll = () => {
+    if (!files) return;
+    const content = `# Terraform Configuration\n# Deployment: ${dep.deploymentId}\n# Project: ${dep.projectName}\n# Generated: ${dep.createdAt}\n\n---\n## main.tf\n${files.main_tf}\n\n---\n## variables.tf\n${files.variables_tf}\n\n---\n## terraform.tfvars\n${files.terraform_tfvars}\n`;
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `terraform-${dep.deploymentId}.txt`;
+    document.body.appendChild(a); a.click();
+    URL.revokeObjectURL(url); document.body.removeChild(a);
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}>
+      <div style={{ background: '#0D1117', borderRadius: '12px', width: '100%', maxWidth: '960px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', boxShadow: '0 25px 60px rgba(0,0,0,0.5)', border: '1px solid #30363d' }}>
+        {/* Terminal title bar */}
+        <div style={{ display: 'flex', alignItems: 'center', padding: '0.75rem 1rem', background: '#161b22', borderRadius: '12px 12px 0 0', borderBottom: '1px solid #30363d', gap: '0.5rem' }}>
+          <div style={{ width: 12, height: 12, borderRadius: '50%', background: '#ff5f57' }} />
+          <div style={{ width: 12, height: 12, borderRadius: '50%', background: '#febc2e' }} />
+          <div style={{ width: 12, height: 12, borderRadius: '50%', background: '#28c840' }} />
+          <span style={{ flex: 1, textAlign: 'center', color: '#8b949e', fontSize: '0.8rem', fontFamily: 'monospace' }}>
+            terraform — {dep.projectName} / {dep.patternId}
+          </span>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button onClick={handleDownloadAll} style={{ padding: '0.25rem 0.75rem', background: '#21262d', color: '#58a6ff', border: '1px solid #30363d', borderRadius: '6px', cursor: 'pointer', fontSize: '0.75rem' }}>
+              ⬇ Download All
+            </button>
+            <button onClick={onClose} style={{ padding: '0.25rem 0.75rem', background: 'transparent', color: '#8b949e', border: 'none', cursor: 'pointer', fontSize: '1rem' }}>✕</button>
+          </div>
+        </div>
+
+        {/* Summary bar */}
+        <div style={{ padding: '0.75rem 1.25rem', background: '#161b22', borderBottom: '1px solid #30363d', display: 'flex', gap: '1.5rem', flexWrap: 'wrap', fontSize: '0.75rem' }}>
+          <span style={{ color: '#3fb950' }}>✓ {dep.summary.building_blocks_resolved.length} blocks resolved</span>
+          <span style={{ color: '#79c0ff' }}>⧉ {dep.summary.modules_resolved.length} modules</span>
+          <span style={{ color: '#e3b341' }}>⬡ {dep.summary.variables_extracted} variables extracted</span>
+          {dep.summary.building_blocks_unresolved.length > 0 && (
+            <span style={{ color: '#f85149' }}>⚠ {dep.summary.building_blocks_unresolved.length} unresolved</span>
+          )}
+          <span style={{ color: '#8b949e', marginLeft: 'auto' }}>🕐 {new Date(dep.createdAt).toLocaleString()}</span>
+        </div>
+
+        {/* File tabs */}
+        <div style={{ display: 'flex', background: '#161b22', borderBottom: '1px solid #30363d', padding: '0 1rem', gap: '0' }}>
+          {(Object.keys(fileLabels) as Array<keyof typeof fileLabels>).map((key) => (
+            <button key={key} onClick={() => setActiveFile(key)} style={{
+              padding: '0.6rem 1.25rem',
+              background: activeFile === key ? '#0D1117' : 'transparent',
+              color: activeFile === key ? '#f0f6fc' : '#8b949e',
+              border: 'none',
+              borderTop: activeFile === key ? '2px solid #f78166' : '2px solid transparent',
+              cursor: 'pointer',
+              fontSize: '0.8rem',
+              fontFamily: 'monospace',
+            }}>
+              {fileLabels[key]}
+              <span style={{ marginLeft: '0.5rem', fontSize: '0.65rem', color: '#6e7681' }}>
+                {formatBytes(dep.fileSizes[`${key}_size` as keyof typeof dep.fileSizes])}
+              </span>
+            </button>
+          ))}
+          <div style={{ flex: 1 }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.25rem' }}>
+            <button onClick={handleCopy} style={{ padding: '0.25rem 0.6rem', background: '#21262d', color: copied ? '#3fb950' : '#8b949e', border: '1px solid #30363d', borderRadius: '4px', cursor: 'pointer', fontSize: '0.7rem' }}>
+              {copied ? '✓ Copied' : '⎘ Copy'}
+            </button>
+            <button onClick={() => handleDownload(activeFile)} style={{ padding: '0.25rem 0.6rem', background: '#21262d', color: '#58a6ff', border: '1px solid #30363d', borderRadius: '4px', cursor: 'pointer', fontSize: '0.7rem' }}>
+              ⬇ Save
+            </button>
+          </div>
+        </div>
+
+        {/* Code area */}
+        <div style={{ flex: 1, overflow: 'auto', padding: '1rem 1.25rem', fontFamily: 'monospace', fontSize: '0.78rem', lineHeight: '1.6', color: '#e6edf3', minHeight: '300px', maxHeight: '50vh' }}>
+          {loading ? (
+            <div style={{ color: '#8b949e', padding: '2rem', textAlign: 'center' }}>⟳ Loading terraform files...</div>
+          ) : !files ? (
+            <div style={{ color: '#f85149' }}>Files not available</div>
+          ) : (
+            <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {currentContent.split('\n').map((line, i) => {
+                let color = '#e6edf3';
+                if (/^\s*(module|resource|variable|output|locals|terraform|provider|data)\s/.test(line)) color = '#ff7b72';
+                else if (/^\s*(source|version|description|type|default|value|region|project)\s*=/.test(line)) color = '#79c0ff';
+                else if (/=\s*"/.test(line)) color = '#a5d6ff';
+                else if (/^\s*#/.test(line)) color = '#6e7681';
+                else if (/^\s*\}/.test(line) || /^\s*\{$/.test(line)) color = '#ffa657';
+                return (
+                  <span key={i} style={{ display: 'block' }}>
+                    <span style={{ color: '#3d444d', userSelect: 'none', marginRight: '1rem', minWidth: '2.5rem', display: 'inline-block', textAlign: 'right' }}>{i + 1}</span>
+                    <span style={{ color }}>{line}</span>
+                  </span>
+                );
+              })}
+            </pre>
+          )}
+        </div>
+
+        {/* Modules panel */}
+        <div style={{ padding: '0.75rem 1.25rem', background: '#161b22', borderTop: '1px solid #30363d', borderRadius: '0 0 12px 12px' }}>
+          <div style={{ fontSize: '0.7rem', color: '#6e7681', marginBottom: '0.4rem' }}>RESOLVED MODULES</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+            {dep.summary.modules_resolved.map((m) => (
+              <span key={m} style={{ padding: '0.15rem 0.5rem', background: '#1f2937', color: '#79c0ff', borderRadius: '4px', fontSize: '0.7rem', fontFamily: 'monospace', border: '1px solid #30363d' }}>{m}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
 
 interface DeploymentVariable {
   name: string;
@@ -171,6 +371,18 @@ export const MyDeployments: React.FC<MyDeploymentsProps> = ({ userId }) => {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [filterStatus, setFilterStatus] = useState<string>('all');
 
+  // Pattern deployments
+  const [patternDeps, setPatternDeps] = useState<PatternDeployment[]>([]);
+  const [terraformOpen, setTerraformOpen] = useState<PatternDeployment | null>(null);
+  const [patternLoading, setPatternLoading] = useState(true);
+
+  useEffect(() => {
+    api.patternDeployments.list()
+      .then((data: PatternDeployment[]) => setPatternDeps(data))
+      .catch(() => setPatternDeps([]))
+      .finally(() => setPatternLoading(false));
+  }, []);
+
   const openDeployment = (d: Deployment) => {
     setSelected(d);
     setActiveTab('variables');
@@ -213,6 +425,9 @@ export const MyDeployments: React.FC<MyDeploymentsProps> = ({ userId }) => {
 
   return (
     <div className="p-8 max-w-7xl">
+      {/* Terraform Console overlay */}
+      {terraformOpen && <TerraformConsole dep={terraformOpen} onClose={() => setTerraformOpen(null)} />}
+
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
@@ -235,6 +450,165 @@ export const MyDeployments: React.FC<MyDeploymentsProps> = ({ userId }) => {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* ── Pattern Deployments ─────────────────────────────────────────────── */}
+      {(patternLoading || patternDeps.length > 0) && (
+        <div className="mb-8">
+          <div className="flex items-center gap-3 mb-3">
+            <span style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.08em', color: '#8b5cf6', background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: '4px', padding: '0.2rem 0.6rem' }}>PR DEPLOYMENT REQUESTS</span>
+            <span className="text-xs text-gray-400">{patternDeps.length} request{patternDeps.length !== 1 ? 's' : ''} · Terraform generated by resolver · GitHub Actions runs plan/apply</span>
+          </div>
+
+          {patternLoading ? (
+            <div className="bg-white rounded-2xl p-6 text-center text-gray-400 text-sm" style={{ border: '1px solid #E0E0E0' }}>Loading pattern deployments…</div>
+          ) : (
+            <div className="flex flex-col gap-3">
+              {patternDeps.map((pd) => {
+                const resolved = pd.resolverStatus === 'resolved';
+                const hasErrors = (pd.summary?.modules_with_fetch_errors?.length ?? 0) > 0;
+                const prNum = pd.prNumber ?? demoPrNumber(pd.deploymentId);
+                const prUrl = pd.prUrl ?? `${NGDI_REPO_URL}/pull/${prNum}`;
+                const prBranch = pd.prBranch ?? `infra/request-${pd.patternId}-${pd.deploymentId.slice(0, 8)}`;
+                const prStatus: 'open' | 'merged' | 'closed' = pd.prStatus ?? 'open';
+                const prStatusCfg = {
+                  open:   { label: 'Open',   bg: '#dafbe1', color: '#1a7f37', border: '#aceebb', icon: '🟢' },
+                  merged: { label: 'Merged', bg: '#f3e8ff', color: '#7c3aed', border: '#ddd6fe', icon: '🟣' },
+                  closed: { label: 'Closed', bg: '#fef2f2', color: '#dc2626', border: '#fecaca', icon: '🔴' },
+                }[prStatus];
+
+                return (
+                  <div key={pd.deploymentId} className="bg-white rounded-2xl p-5" style={{ border: '1px solid #ddd6fe', background: 'linear-gradient(135deg,#faf5ff 0%,#fff 60%)' }}>
+
+                    {/* ── Top row: pattern info + action buttons ── */}
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-center gap-3">
+                        <span className="text-2xl">🏗️</span>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <p className="font-semibold text-sm" style={{ color: '#1A1A1A' }}>{pd.patternId}</p>
+                            <span style={{ fontSize: '0.65rem', fontWeight: 700, padding: '0.1rem 0.4rem', borderRadius: '4px', background: resolved ? '#f0fdf4' : '#fff7ed', color: resolved ? '#16a34a' : '#ea580c', border: `1px solid ${resolved ? '#bbf7d0' : '#fed7aa'}` }}>
+                              {resolved ? '✓ RESOLVED' : '⟳ PENDING'}
+                            </span>
+                            {hasErrors && <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: '#fff7ed', color: '#ea580c', border: '1px solid #fed7aa' }}>⚠ fetch errors</span>}
+                          </div>
+                          <p className="text-xs text-gray-400 mt-0.5">{pd.projectName} · by {pd.createdBy}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-right text-xs text-gray-400 mr-2">
+                          <div>{pd.summary?.modules_resolved?.length ?? 0} modules · {pd.summary?.variables_extracted ?? 0} vars</div>
+                          <div>{new Date(pd.createdAt).toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' })}</div>
+                        </div>
+                        {resolved && (
+                          <button
+                            onClick={() => setTerraformOpen(pd)}
+                            className="px-4 py-1.5 text-xs font-semibold rounded-lg transition-colors"
+                            style={{ background: '#0D1117', color: '#e6edf3', border: '1px solid #30363d' }}
+                          >
+                            {'</> Terraform'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* ── PR info panel ── */}
+                    {resolved && (
+                      <div className="mt-4 rounded-xl overflow-hidden" style={{ border: '1px solid #d0d7de' }}>
+                        {/* PR header */}
+                        <div className="flex items-center gap-3 px-4 py-2.5" style={{ background: '#f6f8fa', borderBottom: '1px solid #d0d7de' }}>
+                          <svg height="16" width="16" viewBox="0 0 16 16" fill="#24292f" style={{ flexShrink: 0 }}>
+                            <path d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h.'.'.5A1.5 1.5 0 0 1 12 4v9.5a2.25 2.25 0 1 1-1.5 0V4a.5.5 0 0 0-.5-.5H10v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354Z"/>
+                          </svg>
+                          <span className="text-sm font-semibold" style={{ color: '#24292f' }}>Pull Request</span>
+                          <span style={{ fontSize: '0.65rem', fontWeight: 700, padding: '0.15rem 0.5rem', borderRadius: '99px', background: prStatusCfg.bg, color: prStatusCfg.color, border: `1px solid ${prStatusCfg.border}` }}>
+                            {prStatusCfg.icon} {prStatusCfg.label}
+                          </span>
+                          <span className="text-xs ml-auto" style={{ color: '#57606a' }}>Demo</span>
+                        </div>
+
+                        {/* PR body */}
+                        <div className="px-4 py-3" style={{ background: '#ffffff' }}>
+                          {/* PR title + number */}
+                          <div className="flex items-start justify-between gap-3 mb-3">
+                            <div>
+                              <p className="text-sm font-semibold" style={{ color: '#24292f' }}>
+                                feat(infra): {pd.patternId} — {pd.projectName}
+                              </p>
+                              <p className="text-xs mt-0.5" style={{ color: '#57606a' }}>
+                                <span style={{ fontFamily: 'monospace', background: '#f1f8ff', color: '#0969da', padding: '0.1rem 0.4rem', borderRadius: '4px', border: '1px solid #d0e5ff' }}>
+                                  #{prNum}
+                                </span>
+                                {' '}&nbsp;into{' '}
+                                <code style={{ background: '#f6f8fa', padding: '0.1rem 0.3rem', borderRadius: '3px', fontSize: '0.72rem' }}>main</code>
+                                {' '}from{' '}
+                                <code style={{ background: '#f6f8fa', padding: '0.1rem 0.3rem', borderRadius: '3px', fontSize: '0.72rem' }}>{prBranch}</code>
+                              </p>
+                            </div>
+                            <a
+                              href={prUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ flexShrink: 0, padding: '0.3rem 0.8rem', background: '#f6f8fa', color: '#24292f', border: '1px solid #d0d7de', borderRadius: '6px', fontSize: '0.72rem', fontWeight: 600, textDecoration: 'none', whiteSpace: 'nowrap' }}
+                            >
+                              View PR ↗
+                            </a>
+                          </div>
+
+                          {/* Metadata row */}
+                          <div className="flex flex-wrap gap-4 text-xs" style={{ color: '#57606a', borderTop: '1px solid #f3f4f6', paddingTop: '0.6rem' }}>
+                            <span>📁 <strong style={{ color: '#24292f' }}>{NGDI_REPO}</strong></span>
+                            <span>📅 {new Date(pd.createdAt).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                            <span>📦 {pd.summary?.modules_resolved?.length ?? 0} modules resolved</span>
+                            <span>🔧 {pd.summary?.variables_extracted ?? 0} variables</span>
+                          </div>
+
+                          {/* GitHub Actions CI status */}
+                          <div className="flex items-center gap-3 mt-3 px-3 py-2 rounded-lg" style={{ background: '#f6f8fa', border: '1px solid #d0d7de' }}>
+                            <span style={{ fontSize: '0.75rem' }}>⚡</span>
+                            <div className="flex-1">
+                              <p className="text-xs font-semibold" style={{ color: '#24292f' }}>GitHub Actions</p>
+                              <p className="text-xs" style={{ color: '#57606a' }}>CI / terraform plan (pull_request)</p>
+                            </div>
+                            <span style={{ fontSize: '0.65rem', fontWeight: 700, padding: '0.15rem 0.6rem', borderRadius: '99px', background: '#dafbe1', color: '#1a7f37', border: '1px solid #aceebb' }}>✓ passing</span>
+                          </div>
+
+                          {/* File listing */}
+                          {pd.fileSizes && (
+                            <div className="mt-3 flex items-center gap-2 flex-wrap">
+                              <span className="text-xs" style={{ color: '#57606a' }}>Generated files:</span>
+                              {(['main.tf', 'variables.tf', 'terraform.tfvars'] as const).map((name, i) => {
+                                const sizes = [pd.fileSizes.main_tf_size, pd.fileSizes.variables_tf_size, pd.fileSizes.terraform_tfvars_size];
+                                return (
+                                  <span key={name} style={{ fontSize: '0.65rem', fontFamily: 'monospace', padding: '0.15rem 0.5rem', borderRadius: '4px', background: '#f1f8ff', color: '#0969da', border: '1px solid #d0e5ff' }}>
+                                    {name} <span style={{ color: '#57606a' }}>({(sizes[i] / 1024).toFixed(1)} KB)</span>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Building blocks chips */}
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {pd.buildingBlocks?.map((b) => (
+                        <span key={b} style={{ fontSize: '0.65rem', padding: '0.15rem 0.5rem', borderRadius: '4px', background: '#ede9fe', color: '#7c3aed', border: '1px solid #ddd6fe', fontFamily: 'monospace' }}>{b}</span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Standard Deployments ────────────────────────────────────────────── */}
+      <div className="flex items-center gap-3 mb-3">
+        <span style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.08em', color: '#E60000', background: '#FFF5F5', border: '1px solid #fecaca', borderRadius: '4px', padding: '0.2rem 0.6rem' }}>DEMO DEPLOYMENTS</span>
+        <span className="text-xs text-gray-400">Mock data for demonstration</span>
       </div>
 
       <div className="flex gap-6">

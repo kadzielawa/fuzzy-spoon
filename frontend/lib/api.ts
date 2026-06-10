@@ -157,6 +157,10 @@ export const api = {
   projects: {
     list: () => apiCall('/projects'),
   },
+  patternDeployments: {
+    list: () => apiCall('/pattern-deployments'),
+    get: (id: string) => apiCall(`/pattern-deployments/${id}`),
+  },
   stats: {
     get: () => apiCall('/stats'),
   },
