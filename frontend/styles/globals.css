@@ -1,25 +1,35 @@
 @import "tailwindcss";
-
 /* Vodafone brand tokens */
 @theme {
   --color-vf-red: #E60000;
   --color-vf-red-dark: #BD0000;
   --color-vf-red-light: #FF1A1A;
-  --color-vf-dark: #1A1A1A;
-  --color-vf-charcoal: #333333;
-  --color-vf-mid: #666666;
-  --color-vf-light: #F4F4F4;
-  --color-vf-border: #E0E0E0;
+  --color-vf-dark: #0F172A;
+  --color-vf-charcoal: #1E293B;
+  --color-vf-mid: #64748B;
+  --color-vf-light: #F8FAFC;
+  --color-vf-border: #E2E8F0;
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
 }
+
 
 html,
 body {
   padding: 0;
   margin: 0;
-  font-family: 'Arial', Helvetica, sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
-  background: #F4F4F4;
-  color: #1A1A1A;
+  -moz-osx-font-smoothing: grayscale;
+  background: #F0F4F8;
+  color: var(--color-vf-dark);
+}
+
+#__next {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
 }
 
 a {

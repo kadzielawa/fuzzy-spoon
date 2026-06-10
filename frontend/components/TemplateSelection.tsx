@@ -13,6 +13,19 @@ interface Template {
   requiredRoles?: string[];
   maxInstances?: number;
   estimatedCost?: string;
+  // Pattern-specific metadata
+  tags?: string[];
+  lifecycle?: string;
+  status?: string;
+  owner?: string;
+  runtimeType?: string;
+  buildingBlocks?: {
+    required?: string[];
+    optional?: string[];
+    default?: string[];
+  };
+  links?: Array<{ title: string; url: string }>;
+  releaseBucket?: string;
 }
 
 /* ─── Local pattern enrichment ───────────────────────────────────────────── */
@@ -354,7 +367,34 @@ const CATEGORY_ICON: Record<string, string> = {
   governance: '🏦',
   iam:        '🤖',
   storage:    '🪣',
+  'data-platform': '💾',
+  'application-platform': '⚙️',
 };
+
+/* ─── Helper function to transform Backstage patterns ────────────────────── */
+function transformBackstagePatternToTemplate(pattern: any): Template {
+  const meta = PATTERN_META[pattern.id] || {};
+  
+  return {
+    id: pattern.id,
+    name: pattern.metadata.name,
+    label: pattern.metadata.title,
+    description: pattern.metadata.description,
+    icon: CATEGORY_ICON[pattern.metadata.domain as keyof typeof CATEGORY_ICON] || '📦',
+    category: pattern.metadata.domain,
+    version: '1.0.0',
+    requiredRoles: ['developer'],
+    // Pattern metadata
+    tags: pattern.metadata.tags || [],
+    lifecycle: pattern.metadata.lifecycle,
+    status: pattern.metadata.status,
+    owner: pattern.metadata.owner,
+    runtimeType: pattern.metadata.runtimeType,
+    buildingBlocks: pattern.metadata.buildingBlocks,
+    links: pattern.metadata.links,
+    releaseBucket: pattern.metadata.releaseBucket,
+  };
+}
 
 /* ─── Component ─────────────────────────────────────────────────────────── */
 interface PatternCatalogProps {
@@ -372,10 +412,26 @@ export const TemplateSelection: React.FC<PatternCatalogProps> = ({ userId, onSel
   const [detailId, setDetailId] = useState<string | null>(null);
 
   useEffect(() => {
-    api.templates.list()
-      .then((data) => setTemplates(data))
-      .catch(console.error)
-      .finally(() => setIsLoading(false));
+    const loadPatterns = async () => {
+      try {
+        // Load catalog patterns only
+        const catalogData = await api.catalogs.patterns.list().catch(() => ({ patterns: [] }));
+
+        // Transform Backstage patterns to Template format
+        const patternsAsTemplates = (catalogData.patterns || []).map(
+          transformBackstagePatternToTemplate
+        );
+
+        setTemplates(patternsAsTemplates);
+      } catch (error) {
+        console.error('Error loading patterns:', error);
+        setTemplates([]);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadPatterns();
   }, [userId]);
 
   const categories = Array.from(new Set(templates.map((t) => t.category))).sort();
@@ -526,13 +582,68 @@ export const TemplateSelection: React.FC<PatternCatalogProps> = ({ userId, onSel
 
                   <p className="text-xs text-gray-500 mb-4 leading-relaxed flex-1">{template.description}</p>
 
-                  {meta?.tags && (
+                  {/* Tags from pattern data */}
+                  {template.tags && template.tags.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mb-4">
-                      {meta.tags.map((tag) => (
-                        <span key={tag} className="px-2 py-0.5 rounded text-xs" style={{ background: '#F4F4F4', color: '#888' }}>
+                      {template.tags.slice(0, 4).map((tag, i) => (
+                        <span key={`tag-${i}`} className="px-2 py-0.5 rounded text-xs" style={{ background: '#F4F4F4', color: '#888' }}>
                           #{tag}
                         </span>
                       ))}
+                      {template.tags.length > 4 && (
+                        <span className="px-2 py-0.5 rounded text-xs" style={{ background: '#F4F4F4', color: '#888' }}>
+                          +{template.tags.length - 4} more
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Pattern metadata display */}
+                  <div className="grid grid-cols-2 gap-2 mb-4 text-xs">
+                    {/* Lifecycle/Status */}
+                    <div className="p-2 rounded-lg text-center" style={{ background: '#F4F4F4' }}>
+                      <p className="font-semibold" style={{ color: '#1A1A1A' }}>{template.lifecycle || 'N/A'}</p>
+                      <p className="text-gray-400">Lifecycle</p>
+                    </div>
+                    {/* Runtime Type */}
+                    <div className="p-2 rounded-lg text-center" style={{ background: '#F4F4F4' }}>
+                      <p className="font-semibold" style={{ color: '#1A1A1A' }} title={template.runtimeType}>{template.runtimeType?.substring(0, 12) || 'Pattern'}</p>
+                      <p className="text-gray-400">Runtime</p>
+                    </div>
+                    {/* Owner */}
+                    {template.owner && (
+                      <div className="p-2 rounded-lg text-center" style={{ background: '#F4F4F4' }}>
+                        <p className="font-semibold" style={{ color: '#1A1A1A' }} title={template.owner}>{template.owner.substring(0, 12)}</p>
+                        <p className="text-gray-400">Owner</p>
+                      </div>
+                    )}
+                    {/* Status */}
+                    {template.status && (
+                      <div className="p-2 rounded-lg text-center" style={{ background: '#F4F4F4' }}>
+                        <p className="font-semibold" style={{ color: '#1A1A1A' }} title={template.status}>{template.status.replace(/_/g, ' ').substring(0, 12)}</p>
+                        <p className="text-gray-400">Status</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Building Blocks Summary */}
+                  {template.buildingBlocks && (
+                    <div className="mb-4 p-3 rounded-lg" style={{ background: '#FAFAFA' }}>
+                      <p className="text-xs font-semibold mb-2" style={{ color: '#1A1A1A' }}>Building Blocks</p>
+                      <div className="flex gap-3 text-xs">
+                        {template.buildingBlocks.required && template.buildingBlocks.required.length > 0 && (
+                          <div>
+                            <p style={{ color: '#E60000', fontWeight: 'bold' }}>{template.buildingBlocks.required.length}</p>
+                            <p style={{ color: '#666' }}>Required</p>
+                          </div>
+                        )}
+                        {template.buildingBlocks.optional && template.buildingBlocks.optional.length > 0 && (
+                          <div>
+                            <p style={{ color: '#7C3AED', fontWeight: 'bold' }}>{template.buildingBlocks.optional.length}</p>
+                            <p style={{ color: '#666' }}>Optional</p>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
 
@@ -544,14 +655,6 @@ export const TemplateSelection: React.FC<PatternCatalogProps> = ({ userId, onSel
                     <div className="p-2 rounded-lg text-center" style={{ background: complexityCfg.bg }}>
                       <p className="font-semibold" style={{ color: complexityCfg.color }}>{meta?.complexity ?? 'Medium'}</p>
                       <p style={{ color: complexityCfg.color, opacity: 0.7 }}>Complexity</p>
-                    </div>
-                    <div className="p-2 rounded-lg text-center" style={{ background: '#F4F4F4' }}>
-                      <p className="font-semibold" style={{ color: '#1A1A1A' }}>{template.estimatedCost ?? 'On request'}</p>
-                      <p className="text-gray-400">Est. cost</p>
-                    </div>
-                    <div className="p-2 rounded-lg text-center" style={{ background: '#F4F4F4' }}>
-                      <p className="font-semibold" style={{ color: '#1A1A1A' }}>v{template.version}</p>
-                      <p className="text-gray-400">Version</p>
                     </div>
                   </div>
 
@@ -615,10 +718,97 @@ export const TemplateSelection: React.FC<PatternCatalogProps> = ({ userId, onSel
 
               {/* Meta chips */}
               <div className="flex flex-wrap gap-2 px-6 py-4" style={{ borderBottom: '1px solid #F4F4F4' }}>
-                {meta?.tags?.map((tag) => (
-                  <span key={tag} className="px-2.5 py-1 rounded-full text-xs" style={{ background: '#F4F4F4', color: '#666' }}>#{tag}</span>
+                {t.tags?.map((tag, i) => (
+                  <span key={`tag-${i}`} className="px-2.5 py-1 rounded-full text-xs" style={{ background: '#F4F4F4', color: '#666' }}>#{tag}</span>
                 ))}
               </div>
+
+              {/* Pattern Metadata */}
+              <div className="px-6 py-4" style={{ borderBottom: '1px solid #F4F4F4' }}>
+                <div className="grid grid-cols-2 gap-3 mb-3">
+                  {t.lifecycle && (
+                    <div className="p-3 rounded-lg" style={{ background: '#F4F4F4' }}>
+                      <p className="text-xs text-gray-500 mb-1">Lifecycle</p>
+                      <p className="text-sm font-semibold" style={{ color: '#1A1A1A' }}>{t.lifecycle}</p>
+                    </div>
+                  )}
+                  {t.status && (
+                    <div className="p-3 rounded-lg" style={{ background: '#F4F4F4' }}>
+                      <p className="text-xs text-gray-500 mb-1">Status</p>
+                      <p className="text-sm font-semibold" style={{ color: '#1A1A1A' }}>{t.status.replace(/_/g, ' ')}</p>
+                    </div>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  {t.owner && (
+                    <div className="p-3 rounded-lg" style={{ background: '#F4F4F4' }}>
+                      <p className="text-xs text-gray-500 mb-1">Owner</p>
+                      <p className="text-sm font-semibold" style={{ color: '#1A1A1A' }}>{t.owner}</p>
+                    </div>
+                  )}
+                  {t.runtimeType && (
+                    <div className="p-3 rounded-lg" style={{ background: '#F4F4F4' }}>
+                      <p className="text-xs text-gray-500 mb-1">Runtime</p>
+                      <p className="text-sm font-semibold" style={{ color: '#1A1A1A' }}>{t.runtimeType}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Building Blocks */}
+              {t.buildingBlocks && (
+                <div className="px-6 py-4" style={{ borderBottom: '1px solid #F4F4F4' }}>
+                  <h3 className="text-sm font-bold mb-3" style={{ color: '#1A1A1A' }}>🧱 Building Blocks</h3>
+                  {t.buildingBlocks.required && t.buildingBlocks.required.length > 0 && (
+                    <div className="mb-3">
+                      <p className="text-xs font-semibold mb-2" style={{ color: '#E60000' }}>Required ({t.buildingBlocks.required.length})</p>
+                      <div className="flex flex-wrap gap-2">
+                        {t.buildingBlocks.required.map((block, i) => (
+                          <span key={`required-${i}`} className="px-2.5 py-1 rounded-lg text-xs" style={{ background: '#FFE4E4', color: '#E60000' }}>
+                            {block}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {t.buildingBlocks.optional && t.buildingBlocks.optional.length > 0 && (
+                    <div className="mb-3">
+                      <p className="text-xs font-semibold mb-2" style={{ color: '#7C3AED' }}>Optional ({t.buildingBlocks.optional.length})</p>
+                      <div className="flex flex-wrap gap-2">
+                        {t.buildingBlocks.optional.map((block, i) => (
+                          <span key={`optional-${i}`} className="px-2.5 py-1 rounded-lg text-xs" style={{ background: '#F3E8FF', color: '#7C3AED' }}>
+                            {block}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Documentation Links */}
+              {t.links && t.links.length > 0 && (
+                <div className="px-6 py-4" style={{ borderBottom: '1px solid #F4F4F4' }}>
+                  <h3 className="text-sm font-bold mb-3" style={{ color: '#1A1A1A' }}>📚 Documentation</h3>
+                  <div className="space-y-2">
+                    {t.links.map((link, i) => (
+                      <a
+                        key={i}
+                        href={link.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block p-3 rounded-lg hover:bg-blue-50 transition-colors"
+                        style={{ border: '1px solid #E0E0E0', color: '#0ea5e9', textDecoration: 'none' }}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium">{link.title}</span>
+                          <span className="text-lg">→</span>
+                        </div>
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Stats */}
               <div className="grid grid-cols-3 gap-3 px-6 py-4" style={{ borderBottom: '1px solid #F4F4F4' }}>

@@ -19,8 +19,16 @@ interface TemplateParameter {
 interface Template {
   id: string;
   label: string;
-  parameters: TemplateParameter[];
+  parameters?: TemplateParameter[];
   estimatedCost?: string;
+  // Pattern fields
+  description?: string;
+  tags?: string[];
+  lifecycle?: string;
+  owner?: string;
+  runtimeType?: string;
+  buildingBlocks?: any;
+  links?: Array<{ title: string; url: string }>;
 }
 
 interface Project {
@@ -60,13 +68,38 @@ export const DeploymentConfig: React.FC<DeploymentConfigProps> = ({
 
   const fetchTemplate = async () => {
     try {
-      const data = await api.templates.get(templateId);
-      setTemplate(data);
-      const initialParams: Record<string, any> = {};
-      data.parameters.forEach((p: TemplateParameter) => {
-        initialParams[p.name] = p.default ?? '';
-      });
-      setParameters(initialParams);
+      // Check if this is a pattern ID (starts with 'pat-')
+      if (templateId.startsWith('pat-')) {
+        try {
+          const patternData = await api.catalogs.patterns.get(templateId);
+          // Transform pattern to template format
+          const transformed: Template = {
+            id: patternData.id,
+            label: patternData.metadata.title,
+            description: patternData.metadata.description,
+            tags: patternData.metadata.tags,
+            lifecycle: patternData.metadata.lifecycle,
+            owner: patternData.metadata.owner,
+            runtimeType: patternData.metadata.runtimeType,
+            buildingBlocks: patternData.metadata.buildingBlocks,
+            links: patternData.metadata.links,
+            parameters: [], // Patterns don't have deployment parameters
+          };
+          setTemplate(transformed);
+        } catch (error) {
+          console.error('Failed to fetch pattern:', error);
+          throw error;
+        }
+      } else {
+        // Regular template
+        const data = await api.templates.get(templateId);
+        setTemplate(data);
+        const initialParams: Record<string, any> = {};
+        data.parameters?.forEach((p: TemplateParameter) => {
+          initialParams[p.name] = p.default ?? '';
+        });
+        setParameters(initialParams);
+      }
     } catch (error) {
       console.error('Failed to fetch template:', error);
     } finally {
@@ -221,12 +254,12 @@ export const DeploymentConfig: React.FC<DeploymentConfigProps> = ({
                 Cancel
               </button>
               <button
-                onClick={() => setStep('configure')}
+                onClick={() => setStep(templateId.startsWith('pat-') ? 'review' : 'configure')}
                 disabled={step !== 'project'}
                 className="px-6 py-2 text-white rounded-xl text-sm font-medium transition-opacity disabled:opacity-40"
                 style={{ background: '#E60000' }}
               >
-                Continue to Configuration
+                Continue to {templateId.startsWith('pat-') ? 'Review' : 'Configuration'}
               </button>
             </div>
           )}
@@ -237,87 +270,115 @@ export const DeploymentConfig: React.FC<DeploymentConfigProps> = ({
       {(step === 'configure' || step === 'review') && currentProject && (
         <div className="bg-white rounded-2xl shadow-sm p-6 mb-6" style={{ border: '1px solid #E0E0E0' }}>
           <h2 className="text-base font-bold mb-4" style={{ color: '#1A1A1A' }}>Step 2: Configure Parameters</h2>
-          <div className="max-h-96 overflow-y-auto space-y-6">
-            {template.parameters.map((param) => (
-              <div key={param.name}>
-                <label className="block text-sm font-medium mb-2" style={{ color: '#1A1A1A' }}>
-                  {param.label} {param.required && <span style={{ color: '#E60000' }}>*</span>}
-                </label>
-                <p className="text-sm text-gray-400 mb-3">{param.description}</p>
-
-                {param.type === 'string' && (
-                  <input
-                    type="text"
-                    value={parameters[param.name] || ''}
-                    onChange={(e) => handleParameterChange(param.name, e.target.value)}
-                    placeholder={param.default || ''}
-                    disabled={step === 'review'}
-                    className="w-full px-4 py-2 rounded-xl text-sm disabled:bg-gray-50 outline-none transition-colors"
-                    style={{ border: '1px solid #E0E0E0' }}
-                  />
-                )}
-
-                {param.type === 'number' && (
-                  <input
-                    type="number"
-                    value={parameters[param.name] || ''}
-                    onChange={(e) => handleParameterChange(param.name, e.target.value)}
-                    min={param.validation?.min || 0}
-                    max={param.validation?.max || 1000}
-                    disabled={step === 'review'}
-                    className="w-full px-4 py-2 rounded-xl text-sm disabled:bg-gray-50 outline-none"
-                    style={{ border: '1px solid #E0E0E0' }}
-                  />
-                )}
-
-                {param.type === 'boolean' && (
-                  <label className="flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={parameters[param.name] || false}
-                      onChange={(e) => handleParameterChange(param.name, e.target.checked)}
-                      disabled={step === 'review'}
-                      className="w-4 h-4 rounded"
-                    />
-                    <span className="ml-2 text-sm text-gray-700">{param.label}</span>
+          
+          {/* Pattern Info (for patterns) */}
+          {templateId.startsWith('pat-') && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+              <p className="text-sm" style={{ color: '#1A1A1A' }}>
+                <strong>Pattern Info:</strong> This is an enterprise-approved pattern designed by {template?.owner}.
+              </p>
+              {template?.runtimeType && (
+                <p className="text-sm text-gray-600 mt-2">
+                  <strong>Runtime Type:</strong> {template.runtimeType}
+                </p>
+              )}
+              {template?.lifecycle && (
+                <p className="text-sm text-gray-600 mt-1">
+                  <strong>Lifecycle:</strong> {template.lifecycle.replace(/_/g, ' ')}
+                </p>
+              )}
+              {template?.buildingBlocks?.required && (
+                <p className="text-sm text-gray-600 mt-1">
+                  <strong>Building Blocks:</strong> {template.buildingBlocks.required.length} required components
+                </p>
+              )}
+            </div>
+          )}
+          
+          {/* Parameters (for templates) */}
+          {!templateId.startsWith('pat-') && (
+            <div className="max-h-96 overflow-y-auto space-y-6">
+              {template?.parameters?.map((param) => (
+                <div key={param.name}>
+                  <label className="block text-sm font-medium mb-2" style={{ color: '#1A1A1A' }}>
+                    {param.label} {param.required && <span style={{ color: '#E60000' }}>*</span>}
                   </label>
-                )}
+                  <p className="text-sm text-gray-400 mb-3">{param.description}</p>
 
-                {param.type === 'select' && param.options && (
-                  <select
-                    value={parameters[param.name] || param.default || ''}
-                    onChange={(e) => handleParameterChange(param.name, e.target.value)}
-                    disabled={step === 'review'}
-                    className="w-full px-4 py-2 rounded-xl text-sm disabled:bg-gray-50 outline-none"
-                    style={{ border: '1px solid #E0E0E0' }}
-                  >
-                    <option value="">Select an option</option>
-                    {param.options.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
-                  </select>
-                )}
+                  {param.type === 'string' && (
+                    <input
+                      type="text"
+                      value={parameters[param.name] || ''}
+                      onChange={(e) => handleParameterChange(param.name, e.target.value)}
+                      placeholder={param.default || ''}
+                      disabled={step === 'review'}
+                      className="w-full px-4 py-2 rounded-xl text-sm disabled:bg-gray-50 outline-none transition-colors"
+                      style={{ border: '1px solid #E0E0E0' }}
+                    />
+                  )}
 
-                {param.type === 'textarea' && (
-                  <textarea
-                    value={parameters[param.name] || ''}
-                    onChange={(e) => handleParameterChange(param.name, e.target.value)}
-                    placeholder={param.default || ''}
-                    disabled={step === 'review'}
-                    rows={4}
-                    className="w-full px-4 py-2 rounded-xl text-sm disabled:bg-gray-50 outline-none"
-                    style={{ border: '1px solid #E0E0E0' }}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
+                  {param.type === 'number' && (
+                    <input
+                      type="number"
+                      value={parameters[param.name] || ''}
+                      onChange={(e) => handleParameterChange(param.name, e.target.value)}
+                      min={param.validation?.min || 0}
+                      max={param.validation?.max || 1000}
+                      disabled={step === 'review'}
+                      className="w-full px-4 py-2 rounded-xl text-sm disabled:bg-gray-50 outline-none"
+                      style={{ border: '1px solid #E0E0E0' }}
+                    />
+                  )}
+
+                  {param.type === 'boolean' && (
+                    <label className="flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={parameters[param.name] || false}
+                        onChange={(e) => handleParameterChange(param.name, e.target.checked)}
+                        disabled={step === 'review'}
+                        className="w-4 h-4 rounded"
+                      />
+                      <span className="ml-2 text-sm text-gray-700">{param.label}</span>
+                    </label>
+                  )}
+
+                  {param.type === 'select' && param.options && (
+                    <select
+                      value={parameters[param.name] || param.default || ''}
+                      onChange={(e) => handleParameterChange(param.name, e.target.value)}
+                      disabled={step === 'review'}
+                      className="w-full px-4 py-2 rounded-xl text-sm disabled:bg-gray-50 outline-none"
+                      style={{ border: '1px solid #E0E0E0' }}
+                    >
+                      <option value="">Select an option</option>
+                      {param.options.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
+                  {param.type === 'textarea' && (
+                    <textarea
+                      value={parameters[param.name] || ''}
+                      onChange={(e) => handleParameterChange(param.name, e.target.value)}
+                      placeholder={param.default || ''}
+                      disabled={step === 'review'}
+                      rows={4}
+                      className="w-full px-4 py-2 rounded-xl text-sm disabled:bg-gray-50 outline-none"
+                      style={{ border: '1px solid #E0E0E0' }}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
 
           <div className="mt-6 flex gap-4">
             <button
-              onClick={() => setStep('project')}
+              onClick={() => setStep(templateId.startsWith('pat-') ? 'project' : 'project')}
               disabled={step === 'review'}
               className="px-6 py-2 border rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-40"
               style={{ borderColor: '#E0E0E0' }}
@@ -349,24 +410,61 @@ export const DeploymentConfig: React.FC<DeploymentConfigProps> = ({
             </div>
 
             <div className="p-4 rounded-xl" style={{ background: '#F4F4F4' }}>
-              <p className="text-sm font-semibold" style={{ color: '#1A1A1A' }}>Configuration Summary</p>
-              <div className="mt-2 space-y-1 text-sm">
-                {template.parameters
-                  .filter((p) => parameters[p.name] !== undefined && parameters[p.name] !== '')
-                  .slice(0, 5)
-                  .map((p) => (
-                    <div key={p.name} className="flex justify-between">
-                      <span className="text-gray-500">{p.label}:</span>
-                      <span className="font-mono font-semibold text-xs" style={{ color: '#333' }}>{String(parameters[p.name])}</span>
+              <p className="text-sm font-semibold" style={{ color: '#1A1A1A' }}>
+                {templateId.startsWith('pat-') ? 'Pattern Information' : 'Configuration Summary'}
+              </p>
+              {templateId.startsWith('pat-') ? (
+                <div className="mt-2 space-y-2 text-sm">
+                  {template?.owner && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Owner:</span>
+                      <span className="font-semibold text-xs">{template.owner}</span>
                     </div>
-                  ))}
-                {template.parameters.filter((p) => parameters[p.name] !== undefined && parameters[p.name] !== '').length > 5 && (
-                  <p className="text-gray-400 italic text-xs">... and more parameters</p>
-                )}
-              </div>
+                  )}
+                  {template?.lifecycle && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Lifecycle:</span>
+                      <span className="font-semibold text-xs">{template.lifecycle.replace(/_/g, ' ')}</span>
+                    </div>
+                  )}
+                  {template?.runtimeType && (
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Runtime Type:</span>
+                      <span className="font-semibold text-xs">{template.runtimeType}</span>
+                    </div>
+                  )}
+                  {template?.tags && template.tags.length > 0 && (
+                    <div>
+                      <span className="text-gray-500 block mb-1">Tags:</span>
+                      <div className="flex flex-wrap gap-1">
+                        {template.tags.slice(0, 5).map((tag) => (
+                          <span key={tag} className="text-xs px-2 py-1 bg-gray-200 rounded-full">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-2 space-y-1 text-sm">
+                  {template?.parameters
+                    ?.filter((p) => parameters[p.name] !== undefined && parameters[p.name] !== '')
+                    .slice(0, 5)
+                    .map((p) => (
+                      <div key={p.name} className="flex justify-between">
+                        <span className="text-gray-500">{p.label}:</span>
+                        <span className="font-mono font-semibold text-xs" style={{ color: '#333' }}>{String(parameters[p.name])}</span>
+                      </div>
+                    ))}
+                  {(template?.parameters?.filter((p) => parameters[p.name] !== undefined && parameters[p.name] !== '') ?? []).length > 5 && (
+                    <p className="text-gray-400 italic text-xs">... and more parameters</p>
+                  )}
+                </div>
+              )}
             </div>
 
-            {template.estimatedCost && (
+            {template?.estimatedCost && (
               <div className="p-4 bg-green-50 rounded-xl">
                 <p className="text-sm font-semibold text-green-900">Estimated Monthly Cost</p>
                 <p className="text-green-700 text-lg font-bold mt-1">{template.estimatedCost}</p>
@@ -384,12 +482,12 @@ export const DeploymentConfig: React.FC<DeploymentConfigProps> = ({
 
           <div className="flex gap-4">
             <button
-              onClick={() => setStep('configure')}
+              onClick={() => setStep(templateId.startsWith('pat-') ? 'project' : 'configure')}
               disabled={step === 'submitted'}
               className="px-6 py-2 border rounded-xl text-sm font-medium text-gray-600 hover:bg-gray-50 transition-colors disabled:opacity-40"
               style={{ borderColor: '#E0E0E0' }}
             >
-              Back to Configuration
+              Back {templateId.startsWith('pat-') ? 'to Project' : 'to Configuration'}
             </button>
             <button
               onClick={handleSubmit}

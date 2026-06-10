@@ -37,9 +37,6 @@ interface FormState {
   enable_pubsub: boolean;
 }
 
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
-
 export default function IDPForm() {
   const [form, setForm] = useState<FormState>({
     pattern: 'cloud_run',
@@ -65,29 +62,41 @@ export default function IDPForm() {
     setError(null);
 
     try {
-      const response = await fetch(`${API_URL}/request`, {
+      // Generate projectId from service name (convert to kebab-case)
+      const projectId = form.service_name
+        .toLowerCase()
+        .replace(/\s+/g, '-')
+        .replace(/[^a-z0-9-]/g, '');
+
+      if (!projectId) {
+        throw new Error('Service name is required');
+      }
+
+      const response = await fetch(`/api/deployments/patterns/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          pattern: form.pattern,
-          service_name: form.service_name,
+          patternId: form.pattern,
+          projectId: projectId,
+          projectName: form.service_name,
           environment: form.environment,
           region: form.region,
-          options: {
-            db: form.enable_db,
+          building_blocks: {
+            database: form.enable_db,
             pubsub: form.enable_pubsub,
           },
         }),
       });
 
-      const data: { status?: string; pr_url?: string; error?: string } =
+      const data: { pr_url?: string; error?: string; prUrl?: string; deploymentId?: string; message?: string } =
         await response.json();
 
       if (!response.ok) {
         throw new Error(data.error ?? 'Request failed');
       }
 
-      setPrUrl(data.pr_url ?? '');
+      console.log('[IDPForm] Deployment submitted:', { deploymentId: data.deploymentId, message: data.message });
+      setPrUrl(data.pr_url || data.prUrl || '');
     } catch (err: unknown) {
       setError(
         err instanceof Error ? err.message : 'An unexpected error occurred',

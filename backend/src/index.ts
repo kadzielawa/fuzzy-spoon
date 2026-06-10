@@ -6,6 +6,8 @@
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import https from 'https';
+import { ResolverService, ResolverDeploymentPayload, ResolverResponse } from './services/resolverService';
 
 dotenv.config();
 
@@ -69,11 +71,32 @@ interface DeploymentRequest {
   projectId: string;
   serviceName: string;
   parameters: Record<string, any>;
-  status: 'draft' | 'pending' | 'approved' | 'deployed' | 'failed';
+  status: 'draft' | 'pending' | 'approved' | 'deployed' | 'failed' | 'resolved';
   createdAt: Date;
   approvedAt?: Date;
   deployedAt?: Date;
   error?: string;
+  // Terraform files from resolver
+  terraformFiles?: {
+    main_tf: string;
+    variables_tf: string;
+    terraform_tfvars: string;
+  };
+  resolverResponse?: Record<string, any>;
+  resolverStatus?: 'pending' | 'resolved' | 'error';
+}
+
+interface DeploymentPayload {
+  patternId: string;
+  projectId: string;
+  projectName: string;
+  building_blocks: Record<string, Record<string, any>>;
+  terraform_version: string;
+  backend: string;
+  modules_ref: string;
+  estimatedMonthlyCost?: number;
+  createdBy?: string;
+  timestamp: string;
 }
 
 // ============================================================================
@@ -540,6 +563,143 @@ const templates: Template[] = [
         options: [{ label: '128 MB', value: '128' }, { label: '256 MB', value: '256' }, { label: '512 MB', value: '512' }, { label: '1024 MB', value: '1024' }, { label: '2048 MB', value: '2048' }] },
     ],
   },
+  // ── PAT-001–006: Vodafone NGDI Pattern Catalogue ──────────────────────────
+  {
+    id: 'pat-001-batch-orchestration',
+    name: 'pat-001-batch-orchestration',
+    label: 'PAT-001 · Batch Orchestration Pipeline',
+    description: 'Managed workflow orchestration with structured storage, object storage, query engine, and deploy chain. Suited for enterprise analytics, data lake, regulatory data storage, and scheduled ETL/ELT.',
+    icon: '🔄',
+    category: 'data',
+    version: '1.0.0',
+    requiredRoles: ['developer', 'architect', 'admin'],
+    estimatedCost: '$200–800/month',
+    parameters: [
+      { name: 'service_name', label: 'Service Name', description: 'Identifier for this pipeline deployment', type: 'string', required: true, validation: { pattern: '^[a-z][a-z0-9-]{1,62}[a-z0-9]$' } },
+      { name: 'environment', label: 'Environment', description: 'Deployment environment', type: 'select', required: true, default: 'dev',
+        options: [{ label: 'Development', value: 'dev' }, { label: 'Staging', value: 'staging' }, { label: 'Production', value: 'prod' }] },
+      { name: 'region', label: 'GCP Region', description: 'Primary deployment region', type: 'select', required: true, default: 'europe-west1',
+        options: [{ label: 'Europe West 1', value: 'europe-west1' }, { label: 'Europe West 4', value: 'europe-west4' }, { label: 'US Central 1', value: 'us-central1' }] },
+      { name: 'workflow_engine', label: 'Workflow Engine', description: 'Orchestration engine for the pipeline', type: 'select', required: true, default: 'composer',
+        options: [{ label: 'Cloud Composer (Airflow)', value: 'composer' }, { label: 'GKE Workload', value: 'gke' }] },
+      { name: 'enable_bigquery', label: 'Enable BigQuery', description: 'Provision BigQuery dataset and tables for structured storage', type: 'boolean', required: false, default: true },
+      { name: 'enable_gcs', label: 'Enable GCS Bucket', description: 'Provision Cloud Storage bucket for staging data', type: 'boolean', required: false, default: true },
+      { name: 'enable_pubsub', label: 'Enable Pub/Sub', description: 'Provision Pub/Sub topics for event-driven triggers', type: 'boolean', required: false, default: false },
+      { name: 'enable_sql', label: 'Enable Cloud SQL', description: 'Provision managed relational database', type: 'boolean', required: false, default: false },
+    ],
+  },
+  {
+    id: 'pat-002-serverless-app',
+    name: 'pat-002-serverless-app',
+    label: 'PAT-002 · Serverless Application',
+    description: 'Serverless compute with a managed relational database and supporting security/identity modules. Suited for internal tooling, lightweight public APIs, and low-traffic web apps.',
+    icon: '⚡',
+    category: 'compute',
+    version: '1.0.0',
+    requiredRoles: ['developer', 'architect', 'admin'],
+    estimatedCost: '$50–300/month',
+    parameters: [
+      { name: 'service_name', label: 'Service Name', description: 'Cloud Run service identifier', type: 'string', required: true, validation: { pattern: '^[a-z][a-z0-9-]{1,62}[a-z0-9]$' } },
+      { name: 'environment', label: 'Environment', description: 'Deployment environment', type: 'select', required: true, default: 'dev',
+        options: [{ label: 'Development', value: 'dev' }, { label: 'Staging', value: 'staging' }, { label: 'Production', value: 'prod' }] },
+      { name: 'region', label: 'GCP Region', description: 'Deployment region', type: 'select', required: true, default: 'europe-west1',
+        options: [{ label: 'Europe West 1', value: 'europe-west1' }, { label: 'Europe West 4', value: 'europe-west4' }, { label: 'US Central 1', value: 'us-central1' }] },
+      { name: 'container_image', label: 'Container Image', description: 'Container image URI for the Cloud Run service', type: 'string', required: true },
+      { name: 'db_tier', label: 'Database Tier', description: 'Cloud SQL instance tier (SQL is required)', type: 'select', required: true, default: 'db-f1-micro',
+        options: [{ label: 'db-f1-micro (dev/PoC)', value: 'db-f1-micro' }, { label: 'db-g1-small', value: 'db-g1-small' }, { label: 'db-custom-2-8192 (prod)', value: 'db-custom-2-8192' }] },
+      { name: 'enable_bigquery', label: 'Enable BigQuery', description: 'Provision BigQuery for analytics', type: 'boolean', required: false, default: false },
+      { name: 'enable_pubsub', label: 'Enable Pub/Sub', description: 'Provision Pub/Sub for event messaging', type: 'boolean', required: false, default: false },
+    ],
+  },
+  {
+    id: 'pat-003-managed-orchestration',
+    name: 'pat-003-managed-orchestration',
+    label: 'PAT-003 · Managed Orchestration Application',
+    description: 'Managed container orchestration with perimeter security, private networking, managed database access, and shared cluster operations. Also serves as shared runtime for platform and SRE teams.',
+    icon: '☸️',
+    category: 'compute',
+    version: '1.0.0',
+    requiredRoles: ['architect', 'admin'],
+    estimatedCost: '$300–1500/month',
+    parameters: [
+      { name: 'cluster_name', label: 'Cluster Name', description: 'GKE cluster identifier', type: 'string', required: true, validation: { pattern: '^[a-z][a-z0-9-]{1,40}[a-z0-9]$' } },
+      { name: 'environment', label: 'Environment', description: 'Deployment environment', type: 'select', required: true, default: 'dev',
+        options: [{ label: 'Development', value: 'dev' }, { label: 'Staging', value: 'staging' }, { label: 'Production', value: 'prod' }] },
+      { name: 'region', label: 'GCP Region', description: 'Cluster region', type: 'select', required: true, default: 'europe-west1',
+        options: [{ label: 'Europe West 1', value: 'europe-west1' }, { label: 'Europe West 4', value: 'europe-west4' }, { label: 'US Central 1', value: 'us-central1' }] },
+      { name: 'k8s_mode', label: 'Cluster Mode', description: 'GKE cluster type', type: 'select', required: true, default: 'autopilot',
+        options: [{ label: 'Autopilot (recommended)', value: 'autopilot' }, { label: 'Standard', value: 'standard' }] },
+      { name: 'enable_platform_ops', label: 'Enable Platform Operations', description: 'Include platform-level worker pools and workload identity for SRE teams', type: 'boolean', required: false, default: false },
+      { name: 'enable_pubsub', label: 'Enable Pub/Sub', description: 'Provision Pub/Sub messaging', type: 'boolean', required: false, default: false },
+    ],
+  },
+  {
+    id: 'pat-004-event-driven',
+    name: 'pat-004-event-driven',
+    label: 'PAT-004 · Event-Driven Microservices Platform',
+    description: 'Decoupled services communicating via an async messaging bus, with event routing, fast in-memory/document stores, and observability tooling. Suited for fan-out/fan-in and event-sourced systems.',
+    icon: '📡',
+    category: 'messaging',
+    version: '1.0.0',
+    requiredRoles: ['developer', 'architect', 'admin'],
+    estimatedCost: '$100–600/month',
+    parameters: [
+      { name: 'service_name', label: 'Platform Name', description: 'Identifier for this microservices platform', type: 'string', required: true, validation: { pattern: '^[a-z][a-z0-9-]{1,62}[a-z0-9]$' } },
+      { name: 'environment', label: 'Environment', description: 'Deployment environment', type: 'select', required: true, default: 'dev',
+        options: [{ label: 'Development', value: 'dev' }, { label: 'Staging', value: 'staging' }, { label: 'Production', value: 'prod' }] },
+      { name: 'region', label: 'GCP Region', description: 'Deployment region', type: 'select', required: true, default: 'europe-west1',
+        options: [{ label: 'Europe West 1', value: 'europe-west1' }, { label: 'Europe West 4', value: 'europe-west4' }, { label: 'US Central 1', value: 'us-central1' }] },
+      { name: 'runtime_type', label: 'Service Runtime', description: 'Runtime for microservices (optional — omit to leave deployment-time choice)', type: 'select', required: false, default: 'cloud-run',
+        options: [{ label: 'Cloud Run (serverless)', value: 'cloud-run' }, { label: 'GKE (container)', value: 'gke' }] },
+      { name: 'enable_bigquery', label: 'Enable BigQuery', description: 'Provision BigQuery for event analytics', type: 'boolean', required: false, default: false },
+      { name: 'enable_sql', label: 'Enable Cloud SQL', description: 'Provision relational database', type: 'boolean', required: false, default: false },
+    ],
+  },
+  {
+    id: 'pat-005-data-ingestion',
+    name: 'pat-005-data-ingestion',
+    label: 'PAT-005 · Data Ingestion Landing Zone',
+    description: 'Ingestion and storage foundation centred on object storage, structured datasets, identity controls, and landing-zone access patterns. Suited for data lake raw zones and multi-source ingestion.',
+    icon: '🛬',
+    category: 'data',
+    version: '1.0.0',
+    requiredRoles: ['architect', 'admin'],
+    estimatedCost: '$30–200/month',
+    parameters: [
+      { name: 'project_name', label: 'Landing Zone Name', description: 'Identifier for this landing zone', type: 'string', required: true, validation: { pattern: '^[a-z][a-z0-9-]{1,62}[a-z0-9]$' } },
+      { name: 'environment', label: 'Environment', description: 'Deployment environment', type: 'select', required: true, default: 'dev',
+        options: [{ label: 'Development', value: 'dev' }, { label: 'Staging', value: 'staging' }, { label: 'Production', value: 'prod' }] },
+      { name: 'region', label: 'GCP Region', description: 'Primary storage region', type: 'select', required: true, default: 'europe-west1',
+        options: [{ label: 'Europe West 1', value: 'europe-west1' }, { label: 'Europe West 4', value: 'europe-west4' }, { label: 'US Central 1', value: 'us-central1' }] },
+      { name: 'bq_location', label: 'BigQuery Location', description: 'BigQuery dataset residency', type: 'select', required: true, default: 'EU',
+        options: [{ label: 'EU (multi-region)', value: 'EU' }, { label: 'europe-west1', value: 'europe-west1' }, { label: 'US (multi-region)', value: 'US' }] },
+      { name: 'gcs_storage_class', label: 'GCS Storage Class', description: 'Default storage class for landing buckets', type: 'select', required: true, default: 'STANDARD',
+        options: [{ label: 'Standard', value: 'STANDARD' }, { label: 'Nearline', value: 'NEARLINE' }, { label: 'Coldline', value: 'COLDLINE' }] },
+    ],
+  },
+  {
+    id: 'pat-006-vm-workload',
+    name: 'pat-006-vm-workload',
+    label: 'PAT-006 · Specialised VM Workload Platform',
+    description: 'VM-centric stack with network, firewall, and relational database resources for proprietary or specialised software that cannot run in containers (GIS, CAD, legacy licensed workloads).',
+    icon: '🖥️',
+    category: 'compute',
+    version: '1.0.0',
+    requiredRoles: ['admin', 'architect'],
+    estimatedCost: '$150–1000/month',
+    parameters: [
+      { name: 'vm_name', label: 'VM Name', description: 'Compute instance identifier', type: 'string', required: true, validation: { pattern: '^[a-z][a-z0-9-]{1,62}[a-z0-9]$' } },
+      { name: 'environment', label: 'Environment', description: 'Deployment environment', type: 'select', required: true, default: 'dev',
+        options: [{ label: 'Development', value: 'dev' }, { label: 'Staging', value: 'staging' }, { label: 'Production', value: 'prod' }] },
+      { name: 'region', label: 'GCP Region', description: 'Deployment region', type: 'select', required: true, default: 'europe-west1',
+        options: [{ label: 'Europe West 1', value: 'europe-west1' }, { label: 'Europe West 4', value: 'europe-west4' }, { label: 'US Central 1', value: 'us-central1' }] },
+      { name: 'machine_type', label: 'Machine Type', description: 'VM instance machine type', type: 'select', required: true, default: 'n2-standard-4',
+        options: [{ label: 'n2-standard-2 (2 vCPU / 8 GB)', value: 'n2-standard-2' }, { label: 'n2-standard-4 (4 vCPU / 16 GB)', value: 'n2-standard-4' }, { label: 'n2-standard-8 (8 vCPU / 32 GB)', value: 'n2-standard-8' }, { label: 'n2-standard-16 (16 vCPU / 64 GB)', value: 'n2-standard-16' }] },
+      { name: 'disk_size_gb', label: 'Boot Disk Size (GB)', description: 'Boot disk capacity', type: 'number', required: true, default: 100, validation: { min: 50, max: 10000 } },
+      { name: 'workload_type', label: 'Workload Type', description: 'Type of specialised workload running on this VM', type: 'select', required: true, default: 'legacy',
+        options: [{ label: 'ArcGIS / GIS Platform', value: 'arcgis' }, { label: 'SAP / ERP System', value: 'sap' }, { label: 'CAD Platform', value: 'cad' }, { label: 'Other Licensed Software', value: 'legacy' }] },
+    ],
+  },
 ];
 
 const deployments: DeploymentRequest[] = [];
@@ -549,13 +709,24 @@ const deployments: DeploymentRequest[] = [];
 // ============================================================================
 
 const authenticateUser = (req: Request, res: Response, next: NextFunction) => {
-  const userId = (req.headers['x-user-id'] as string) || 'user-123';
+  // Get user ID from header, fallback to default user for development
+  let userId = (req.headers['x-user-id'] as string) || 'user-123';
+  
+  console.log(`[Auth] Authenticating user: ${userId} for ${req.method} ${req.path}`);
+  
   const user = mockUsers.get(userId);
 
   if (!user) {
-    return res.status(401).json({ error: 'User not found' });
+    console.error(`[Auth] User not found: ${userId}`);
+    console.log(`[Auth] Available users: ${Array.from(mockUsers.keys()).join(', ')}`);
+    return res.status(401).json({ 
+      error: 'User not found',
+      userId: userId,
+      availableUsers: Array.from(mockUsers.keys())
+    });
   }
 
+  console.log(`[Auth] User authenticated:`, { userId, name: user.name, roles: user.roles });
   (req as any).user = user;
   next();
 };
@@ -578,6 +749,19 @@ const requireRole = (requiredRoles: string[]) => {
 };
 
 // ============================================================================
+// Request Logger Middleware
+// ============================================================================
+
+app.use((req: Request, res: Response, next: NextFunction) => {
+  console.log(`[BACKEND] ========== INCOMING REQUEST ==========`);
+  console.log(`[BACKEND] ${req.method} ${req.path}`);
+  console.log(`[BACKEND] Headers:`, { 'x-user-id': req.headers['x-user-id'], 'content-type': req.headers['content-type'] });
+  if (Object.keys(req.query || {}).length > 0) console.log(`[BACKEND] Query:`, req.query);
+  if (req.method !== 'GET' && req.body) console.log(`[BACKEND] Body:`, JSON.stringify(req.body).substring(0, 200));
+  next();
+});
+
+// ============================================================================
 // Routes
 // ============================================================================
 
@@ -598,7 +782,9 @@ app.get('/api/health', (_req, res) => {
 // ============================================================================
 
 app.get('/api/user', authenticateUser, (req: Request, res: Response) => {
+  console.log(`[API /user] GET request received`);
   const user = (req as any).user;
+  console.log(`[API /user] Returning user data:`, user);
   res.json(user);
 });
 
@@ -658,12 +844,178 @@ app.get('/api/templates/:id', authenticateUser, (req: Request, res: Response) =>
 });
 
 // ============================================================================
-// Deployment endpoints
-// ============================================================================
+  // Pattern Catalog endpoints (Backstage-style patterns)
+  // ============================================================================
 
-app.post('/api/deployments', authenticateUser, (req: Request, res: Response) => {
-  const user = (req as any).user;
-  const { templateId, projectId, serviceName, parameters } = req.body;
+  app.get('/api/catalogs/patterns', authenticateUser, async (req: Request, res: Response) => {
+    try {
+      console.log(`[API /catalogs/patterns] GET request received`);
+      const { tag, domain, lifecycle, search } = req.query;
+      console.log(`[API /catalogs/patterns] Query filters:`, { tag, domain, lifecycle, search });
+      
+      const filters: any = {};
+      if (tag) filters.tag = tag as string;
+      if (domain) filters.domain = domain as string;
+      if (lifecycle) filters.lifecycle = lifecycle as string;
+      if (search) filters.search = search as string;
+
+      // Import PatternService dynamically
+      const PatternService = require('./services/patternService').PatternService;
+      console.log(`[API /catalogs/patterns] Fetching catalog with filters:`, filters);
+      const catalog = await PatternService.getCatalog(filters);
+      console.log(`[API /catalogs/patterns] Returning ${catalog.patterns?.length || 0} patterns`);
+      
+      res.json(catalog);
+    } catch (error) {
+      console.error('[API /catalogs/patterns] Error fetching patterns catalog:', error);
+      res.status(500).json({ error: 'Failed to fetch patterns catalog' });
+    }
+  });
+
+  app.get('/api/catalogs/patterns/:id', authenticateUser, async (req: Request, res: Response) => {
+    try {
+      const PatternService = require('./services/patternService').PatternService;
+      const pattern = await PatternService.getById(req.params.id);
+      
+      if (!pattern) {
+        return res.status(404).json({ error: 'Pattern not found' });
+      }
+      
+      res.json(pattern);
+    } catch (error) {
+      console.error('Error fetching pattern:', error);
+      res.status(500).json({ error: 'Failed to fetch pattern' });
+    }
+  });
+
+  app.get('/api/catalogs/patterns/tags/all', authenticateUser, async (req: Request, res: Response) => {
+    try {
+      const PatternService = require('./services/patternService').PatternService;
+      const tags = await PatternService.getTags();
+      
+      res.json({ tags });
+    } catch (error) {
+      console.error('Error fetching tags:', error);
+      res.status(500).json({ error: 'Failed to fetch tags' });
+    }
+  });
+
+  app.get('/api/catalogs/patterns/domains/all', authenticateUser, async (req: Request, res: Response) => {
+    try {
+      const PatternService = require('./services/patternService').PatternService;
+      const domains = await PatternService.getDomains();
+      
+      res.json({ domains });
+    } catch (error) {
+      console.error('Error fetching domains:', error);
+      res.status(500).json({ error: 'Failed to fetch domains' });
+    }
+  });
+
+  app.get('/api/catalogs/patterns/lifecycles/all', authenticateUser, async (req: Request, res: Response) => {
+    try {
+      const PatternService = require('./services/patternService').PatternService;
+      const lifecycles = await PatternService.getLifecycles();
+      
+      res.json({ lifecycles });
+    } catch (error) {
+      console.error('Error fetching lifecycles:', error);
+      res.status(500).json({ error: 'Failed to fetch lifecycles' });
+    }
+  });
+
+  // ============================================================================
+  // Building Block Catalog endpoints
+  // ============================================================================
+
+  app.get('/api/catalogs/building-blocks', authenticateUser, async (req: Request, res: Response) => {
+    try {
+      const { BuildingBlockService } = require('./services/buildingBlockService');
+      const blocks = await BuildingBlockService.getAllAsync();
+      
+      res.json({ blocks });
+    } catch (error) {
+      console.error('Error fetching building blocks:', error);
+      res.status(500).json({ error: 'Failed to fetch building blocks' });
+    }
+  });
+
+  app.get('/api/catalogs/building-blocks/:id', authenticateUser, async (req: Request, res: Response) => {
+    try {
+      const { BuildingBlockService } = require('./services/buildingBlockService');
+      const block = await BuildingBlockService.getByIdAsync(req.params.id);
+      
+      if (!block) {
+        return res.status(404).json({ error: 'Building block not found' });
+      }
+      
+      res.json(block);
+    } catch (error) {
+      console.error('Error fetching building block:', error);
+      res.status(500).json({ error: 'Failed to fetch building block' });
+    }
+  });
+
+  app.get('/api/catalogs/building-blocks/:id/variables', authenticateUser, async (req: Request, res: Response) => {
+    try {
+      const { BuildingBlockService } = require('./services/buildingBlockService');
+      const block = await BuildingBlockService.getByIdAsync(req.params.id);
+      
+      if (!block) {
+        return res.status(404).json({ error: 'Building block not found' });
+      }
+      
+      res.json({ 
+        blockId: req.params.id,
+        variables: block.variables,
+        outputs: block.outputs,
+        dependencies: block.dependencies 
+      });
+    } catch (error) {
+      console.error('Error fetching building block variables:', error);
+      res.status(500).json({ error: 'Failed to fetch building block variables' });
+    }
+  });
+
+  app.get('/api/catalogs/patterns/:id/blocks', authenticateUser, async (req: Request, res: Response) => {
+    try {
+      const PatternService = require('./services/patternService').PatternService;
+      const { BuildingBlockService } = require('./services/buildingBlockService');
+      
+      const pattern = await PatternService.getById(req.params.id);
+      if (!pattern) {
+        return res.status(404).json({ error: 'Pattern not found' });
+      }
+
+      const buildingBlockIds = pattern.metadata.buildingBlocks?.required || [];
+      const optionalBlockIds = pattern.metadata.buildingBlocks?.optional || [];
+      console.log(`[API /catalogs/patterns/:id/blocks] Pattern: ${req.params.id}`);
+      console.log(`[API /catalogs/patterns/:id/blocks] Building block IDs:`, buildingBlockIds);
+      
+      const requiredBlocks = await BuildingBlockService.getBlocksForPatternAsync(buildingBlockIds);
+      const optionalBlocks = await BuildingBlockService.getBlocksForPatternAsync(optionalBlockIds);
+      
+      console.log(`[API /catalogs/patterns/:id/blocks] Required blocks returned:`, requiredBlocks.length, requiredBlocks[0]?.id || 'No ID');
+      console.log(`[API /catalogs/patterns/:id/blocks] First required block keys:`, requiredBlocks[0] ? Object.keys(requiredBlocks[0]) : 'N/A');
+      
+      res.json({
+        ...pattern,
+        requiredBlocks,
+        optionalBlocks
+      });
+    } catch (error) {
+      console.error('Error fetching pattern blocks:', error);
+      res.status(500).json({ error: 'Failed to fetch pattern blocks' });
+    }
+  });
+
+  // ============================================================================
+  // Deployment endpoints
+  // ============================================================================
+
+  app.post('/api/deployments', authenticateUser, (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const { templateId, projectId, serviceName, parameters } = req.body;
 
   const template = templates.find((t) => t.id === templateId);
   if (!template) {
@@ -703,6 +1055,285 @@ app.post('/api/deployments', authenticateUser, (req: Request, res: Response) => 
     nextStep: 'review_and_submit',
     estimatedCost: template.estimatedCost,
   });
+});
+
+// ============================================================================
+// Pattern Deployment endpoints (BEFORE generic :id route to prevent conflicts)
+// ============================================================================
+
+app.post('/api/deployments/patterns/submit', authenticateUser, async (req: Request, res: Response) => {
+  try {
+    const { patternId, projectId, projectName, building_blocks, estimatedMonthlyCost, environment, region } = req.body;
+    const user = (req as any).user;
+
+    console.log('[Deployment] ========== NEW DEPLOYMENT SUBMISSION ==========');
+    console.log('[Deployment] User:', user.id, user.name);
+    console.log('[Deployment] Pattern ID:', patternId);
+    console.log('[Deployment] Project ID:', projectId);
+    console.log('[Deployment] Project Name:', projectName);
+    console.log('[Deployment] Building Blocks:', building_blocks);
+
+    // Validate required fields
+    if (!patternId || !projectId || !building_blocks) {
+      console.error('[Deployment] ❌ VALIDATION FAILED - Missing required fields');
+      return res.status(400).json({ error: 'Missing required fields: patternId, projectId, building_blocks' });
+    }
+
+    console.log('[Deployment] ✅ Validation passed');
+
+    // Create deployment ID early
+    const deploymentId = `dep-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    // Build deployment payload for resolver
+    const innerPayload = {
+      patternId,
+      projectId,
+      projectName: projectName || `project-${projectId}`,
+      building_blocks,
+      terraform_version: '~> 1.9',
+      backend: 'local',
+      modules_ref: 'main',
+      estimatedMonthlyCost,
+      createdBy: user.id,
+      timestamp: new Date().toISOString(),
+    };
+
+    // Build resolver payload
+    const resolverPayload: ResolverDeploymentPayload = {
+      deploymentId,
+      status: 'pending',
+      payload: innerPayload,
+      message: 'Pattern deployment submitted for resolution',
+      createdBy: user.name,
+      timestamp: new Date().toISOString(),
+    };
+
+    console.log('[Pattern Deployment] Submitting to resolver:', JSON.stringify(resolverPayload, null, 2));
+
+    // Submit to resolver
+    let resolverResponse: ResolverResponse | null = null;
+    let resolverError: string | null = null;
+
+    try {
+      resolverResponse = await ResolverService.submitDeployment(resolverPayload);
+      console.log('[Pattern Deployment] ✅ Resolver returned successfully');
+      console.log('[Pattern Deployment] Response status:', resolverResponse.status);
+
+      // Validate Terraform files
+      const validation = ResolverService.validateTerraformFiles(resolverResponse);
+      if (!validation.valid) {
+        console.warn('[Pattern Deployment] ⚠️  Terraform files validation:', validation.errors);
+      } else {
+        console.log('[Pattern Deployment] ✅ Terraform files validated');
+      }
+
+      // Log file sizes
+      const fileSizes = ResolverService.getTerraformFileSizes(
+        ResolverService.extractTerraformFiles(resolverResponse)
+      );
+      console.log('[Pattern Deployment] Terraform file sizes:', fileSizes);
+    } catch (apiError) {
+      const errorMsg = apiError instanceof Error ? apiError.message : String(apiError);
+      console.error('[Pattern Deployment] ❌ Resolver API error:', errorMsg);
+      resolverError = errorMsg;
+    }
+
+    // Store deployment locally
+    const deployment: DeploymentRequest = {
+      id: deploymentId,
+      userId: user.id,
+      templateId: patternId,
+      projectId,
+      serviceName: `${patternId}-${projectId}`,
+      parameters: building_blocks,
+      status: resolverResponse ? 'resolved' : 'pending',
+      resolverStatus: resolverResponse ? 'resolved' : resolverError ? 'error' : 'pending',
+      createdAt: new Date(),
+    };
+
+    // Store Terraform files if available
+    if (resolverResponse) {
+      deployment.terraformFiles = ResolverService.extractTerraformFiles(resolverResponse);
+      deployment.resolverResponse = ResolverService.formatResolverResponse(resolverResponse);
+    }
+
+    deployments.push(deployment);
+
+    // Build response
+    const responseData: any = {
+      deploymentId: deployment.id,
+      status: deployment.status,
+      resolverStatus: deployment.resolverStatus,
+      projectId,
+      projectName: projectName || `project-${projectId}`,
+      message: resolverResponse
+        ? 'Pattern resolved successfully - Terraform files generated'
+        : 'Pattern deployment submitted - awaiting resolution',
+      createdBy: user.name,
+      timestamp: new Date().toISOString(),
+    };
+
+    // Include Terraform files if available
+    if (deployment.terraformFiles) {
+      responseData.terraformFiles = {
+        main_tf_size: Buffer.byteLength(deployment.terraformFiles.main_tf, 'utf-8'),
+        variables_tf_size: Buffer.byteLength(deployment.terraformFiles.variables_tf, 'utf-8'),
+        terraform_tfvars_size: Buffer.byteLength(deployment.terraformFiles.terraform_tfvars, 'utf-8'),
+      };
+      responseData.summary = resolverResponse?.summary;
+    }
+
+    // Include error if present
+    if (resolverError) {
+      responseData.error = resolverError;
+    }
+
+    console.log('[Deployment] ✅ SUBMISSION SUCCESS');
+    console.log('[Deployment] Deployment ID:', deployment.id);
+    console.log('[Deployment] Status:', deployment.status);
+    console.log('[Deployment] ==========================================================\n');
+
+    res.json(responseData);
+  } catch (error) {
+    console.error('Error submitting pattern deployment:', error);
+    res.status(500).json({ error: 'Failed to submit pattern deployment' });
+  }
+});
+
+// ============================================================================
+// Terraform File Retrieval Endpoints
+// ============================================================================
+
+app.get('/api/deployments/:deploymentId/terraform', authenticateUser, (req: Request, res: Response) => {
+  try {
+    const { deploymentId } = req.params;
+    const deployment = deployments.find((d) => d.id === deploymentId);
+
+    if (!deployment) {
+      return res.status(404).json({ error: 'Deployment not found' });
+    }
+
+    if (!deployment.terraformFiles) {
+      return res.status(404).json({ 
+        error: 'Terraform files not available',
+        message: 'Deployment has not been resolved yet or resolver returned no files'
+      });
+    }
+
+    res.json({
+      deploymentId: deployment.id,
+      projectId: deployment.projectId,
+      status: deployment.resolverStatus,
+      terraformFiles: {
+        main_tf_size: Buffer.byteLength(deployment.terraformFiles.main_tf, 'utf-8'),
+        variables_tf_size: Buffer.byteLength(deployment.terraformFiles.variables_tf, 'utf-8'),
+        terraform_tfvars_size: Buffer.byteLength(deployment.terraformFiles.terraform_tfvars, 'utf-8'),
+      },
+      summary: deployment.resolverResponse?.summary,
+    });
+  } catch (error) {
+    console.error('Error retrieving terraform files:', error);
+    res.status(500).json({ error: 'Failed to retrieve terraform files' });
+  }
+});
+
+app.get('/api/deployments/:deploymentId/terraform/main', authenticateUser, (req: Request, res: Response) => {
+  try {
+    const { deploymentId } = req.params;
+    const deployment = deployments.find((d) => d.id === deploymentId);
+
+    if (!deployment) {
+      return res.status(404).json({ error: 'Deployment not found' });
+    }
+
+    if (!deployment.terraformFiles || !deployment.terraformFiles.main_tf) {
+      return res.status(404).json({ error: 'main.tf not available' });
+    }
+
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', `attachment; filename="main.tf"`);
+    res.send(deployment.terraformFiles.main_tf);
+  } catch (error) {
+    console.error('Error retrieving main.tf:', error);
+    res.status(500).json({ error: 'Failed to retrieve main.tf' });
+  }
+});
+
+app.get('/api/deployments/:deploymentId/terraform/variables', authenticateUser, (req: Request, res: Response) => {
+  try {
+    const { deploymentId } = req.params;
+    const deployment = deployments.find((d) => d.id === deploymentId);
+
+    if (!deployment) {
+      return res.status(404).json({ error: 'Deployment not found' });
+    }
+
+    if (!deployment.terraformFiles || !deployment.terraformFiles.variables_tf) {
+      return res.status(404).json({ error: 'variables.tf not available' });
+    }
+
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', `attachment; filename="variables.tf"`);
+    res.send(deployment.terraformFiles.variables_tf);
+  } catch (error) {
+    console.error('Error retrieving variables.tf:', error);
+    res.status(500).json({ error: 'Failed to retrieve variables.tf' });
+  }
+});
+
+app.get('/api/deployments/:deploymentId/terraform/tfvars', authenticateUser, (req: Request, res: Response) => {
+  try {
+    const { deploymentId } = req.params;
+    const deployment = deployments.find((d) => d.id === deploymentId);
+
+    if (!deployment) {
+      return res.status(404).json({ error: 'Deployment not found' });
+    }
+
+    if (!deployment.terraformFiles || !deployment.terraformFiles.terraform_tfvars) {
+      return res.status(404).json({ error: 'terraform.tfvars not available' });
+    }
+
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Content-Disposition', `attachment; filename="terraform.tfvars"`);
+    res.send(deployment.terraformFiles.terraform_tfvars);
+  } catch (error) {
+    console.error('Error retrieving terraform.tfvars:', error);
+    res.status(500).json({ error: 'Failed to retrieve terraform.tfvars' });
+  }
+});
+
+app.post('/api/deployments/patterns/:deploymentId/execute', authenticateUser, requireRole(['architect', 'admin']), async (req: Request, res: Response) => {
+  try {
+    const { deploymentId } = req.params;
+    const deployment = deployments.find((d) => d.id === deploymentId);
+
+    if (!deployment) {
+      return res.status(404).json({ error: 'Deployment not found' });
+    }
+
+    // In production, this would:
+    // 1. Send the payload to an external Terraform API
+    // 2. Trigger the actual infrastructure deployment
+    // 3. Track deployment status
+
+    deployment.status = 'deployed';
+    deployment.deployedAt = new Date();
+
+    const user = (req as any).user;
+
+    res.json({
+      deploymentId,
+      status: 'deployed',
+      message: 'Pattern deployment initiated',
+      deployedBy: user.name,
+      timestamp: new Date().toISOString(),
+      terraformApplied: true,
+    });
+  } catch (error) {
+    console.error('Error executing pattern deployment:', error);
+    res.status(500).json({ error: 'Failed to execute pattern deployment' });
+  }
 });
 
 app.get('/api/deployments/:id', authenticateUser, (req: Request, res: Response) => {
@@ -846,8 +1477,33 @@ app.get('/api/stats', authenticateUser, requireRole(['admin', 'architect']), (re
 // Error handling
 // ============================================================================
 
+// ============================================================================
+// Deployment History (for debugging)
+// ============================================================================
+
+app.get('/api/deployments', authenticateUser, (req: Request, res: Response) => {
+  const user = (req as any).user;
+  
+  // Admins see all deployments, others see only their own
+  const filtered = user.roles.includes('admin')
+    ? deployments
+    : deployments.filter((d) => d.userId === user.id);
+
+  res.json({
+    total: filtered.length,
+    deployments: filtered.map((d) => ({
+      deploymentId: d.id,
+      patternId: d.templateId,
+      projectId: d.projectId,
+      status: d.status,
+      createdAt: d.createdAt,
+      deployedAt: d.deployedAt,
+    })),
+  });
+});
+
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
-  console.error(err);
+  console.error(`[ERROR] ${req.method} ${req.path}:`, err);
   res.status(500).json({
     error: 'Internal server error',
     message: err.message,

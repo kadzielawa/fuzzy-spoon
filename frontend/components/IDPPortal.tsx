@@ -3,6 +3,7 @@ import { LoginPage } from './LoginPage';
 import { UserProfile } from './UserProfile';
 import { TemplateSelection } from './TemplateSelection';
 import { DeploymentConfig } from './DeploymentConfig';
+import { DeploymentConfigV2 } from './DeploymentConfigV2';
 import { VodafoneLogo } from './VodafoneLogo';
 import { MyDeployments } from './MyDeployments';
 import { DemoDeployment } from './DemoDeployment';
@@ -24,6 +25,10 @@ export const IDPPortal: React.FC = () => {
       setUserId(storedUserId);
       fetchUserName(storedUserId);
       setCurrentPage('dashboard');
+    } else {
+      // No user in storage, go to login
+      console.log('[IDPPortal] No userId in localStorage, showing login');
+      setCurrentPage('login');
     }
   }, []);
 
@@ -284,12 +289,21 @@ export const IDPPortal: React.FC = () => {
         )}
 
         {currentPage === 'config-template' && selectedTemplateId && (
-          <DeploymentConfig
-            userId={userId}
-            templateId={selectedTemplateId}
-            onDeploymentCreated={handleDeploymentCreated}
-            onCancel={() => setCurrentPage('templates')}
-          />
+          selectedTemplateId.startsWith('pat-') ? (
+            <DeploymentConfigV2
+              userId={userId}
+              templateId={selectedTemplateId}
+              onDeploymentCreated={handleDeploymentCreated}
+              onCancel={() => setCurrentPage('templates')}
+            />
+          ) : (
+            <DeploymentConfig
+              userId={userId}
+              templateId={selectedTemplateId}
+              onDeploymentCreated={handleDeploymentCreated}
+              onCancel={() => setCurrentPage('templates')}
+            />
+          )
         )}
 
         {currentPage === 'profile' && (
