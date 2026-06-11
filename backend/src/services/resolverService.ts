@@ -95,15 +95,20 @@ export class ResolverService {
       }
 
       logResolverAPICall({
-        deploymentId: payload.deploymentId,
-        endpoint: '/resolve',
-        method: 'POST',
-        requestSize: Buffer.byteLength(payloadJson),
-        responseStatus: response.status,
-        responseSizeBytes: Buffer.byteLength(responseText),
-        duration,
         timestamp: new Date().toISOString(),
-        success: response.ok,
+        deploymentId: payload.deploymentId,
+        request: {
+          method: 'POST',
+          url: this.RESOLVER_URL + '/resolve',
+          payloadSize: Buffer.byteLength(payloadJson),
+          timeout: this.TIMEOUT_MS,
+        },
+        response: {
+          status: response.status,
+          duration,
+          size: Buffer.byteLength(responseText),
+          body: responseData,
+        },
       });
 
       if (!response.ok) {
@@ -116,14 +121,20 @@ export class ResolverService {
       const errorMsg = error instanceof Error ? error.message : String(error);
 
       logResolverAPICall({
-        deploymentId: payload.deploymentId,
-        endpoint: '/resolve',
-        method: 'POST',
-        requestSize: Buffer.byteLength(payloadJson),
-        responseStatus: 0,
-        responseSizeBytes: 0,
-        duration,
         timestamp: new Date().toISOString(),
+        deploymentId: payload.deploymentId,
+        request: {
+          method: 'POST',
+          url: this.RESOLVER_URL + '/resolve',
+          payloadSize: Buffer.byteLength(payloadJson),
+          timeout: this.TIMEOUT_MS,
+        },
+        response: {
+          status: 0,
+          duration,
+          size: 0,
+          body: null,
+        },
         error: errorMsg,
       });
 
