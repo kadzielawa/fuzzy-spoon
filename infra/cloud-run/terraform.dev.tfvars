@@ -31,7 +31,7 @@ environment_variables = {
   DATABASE_POOL_SIZE  = "5"
   CACHE_ENABLED       = "false"
   # Backend Cloud Run URL — update after deploying the backend service
-  BACKEND_URL         = "https://idp-backend-dev-<hash>-ew.a.run.app"
+  BACKEND_URL         = "https://ui-backend-479677124022.europe-west1.run.app"
 }
 
 labels = {

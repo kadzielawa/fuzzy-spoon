@@ -2,6 +2,9 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 
 const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3001';
 
+// Log once at module load so it's visible in server startup output
+console.log(`\n[API Proxy] ✅ BACKEND_URL = ${BACKEND_URL}\n`);
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { path } = req.query;
   const pathString = Array.isArray(path) ? path.join('/') : path;
