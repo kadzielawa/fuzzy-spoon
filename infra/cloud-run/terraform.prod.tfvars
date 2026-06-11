@@ -32,6 +32,8 @@ environment_variables = {
   CACHE_ENABLED       = "true"
   CACHE_TTL           = "3600"
   MAX_CONNECTIONS     = "1000"
+  # Backend Cloud Run URL — update after deploying the backend service
+  BACKEND_URL         = "https://idp-backend-prod-<hash>-ew.a.run.app"
 }
 
 labels = {

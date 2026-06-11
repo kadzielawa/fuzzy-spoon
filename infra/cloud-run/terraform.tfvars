@@ -35,6 +35,10 @@ environment_variables = {
   LOG_LEVEL       = "INFO"
   DATABASE_POOL   = "10"
   CACHE_TTL       = "3600"
+  # Set BACKEND_URL to the Cloud Run URL of the backend service so the
+  # Next.js server-side rewrite can proxy /api/* to it at runtime.
+  # Replace with the actual backend Cloud Run URL after first terraform apply.
+  BACKEND_URL     = "https://idp-backend-<hash>-ew.a.run.app"
 }
 
 # Labels
