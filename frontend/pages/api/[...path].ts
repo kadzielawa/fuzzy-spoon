@@ -3,11 +3,11 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const { slug } = req.query;
-  const pathString = Array.isArray(slug) ? slug.join('/') : slug;
+  const { path } = req.query;
+  const pathString = Array.isArray(path) ? path.join('/') : path;
 
   console.log(`[API Proxy] ========== INCOMING REQUEST ==========`);
-  console.log(`[API Proxy] Slug query param:`, slug);
+  console.log(`[API Proxy] Path query param:`, path);
   console.log(`[API Proxy] Resolved pathString:`, pathString);
 
   if (!pathString) {
